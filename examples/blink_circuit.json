@@ -1,0 +1,40 @@
+{
+  "mcu": "U1",
+
+  "power": {
+    "3V3": 3.3,
+    "GND": 0.0
+  },
+
+  "parts": {
+    "U1": {
+      "type": "esp32-wroom-32",
+      "pins": {
+        "VDD":   "3V3",
+        "GND_1": "GND",
+        "IO2":   "GPIO_2"
+      }
+    },
+
+    "C1": {
+      "type": "capacitor",
+      "value": "100n",
+      "note": "decoupling cap on VDD",
+      "pins": { "+": "3V3", "-": "GND" }
+    },
+
+    "R1": {
+      "type": "resistor",
+      "value": "220",
+      "note": "current-limiting resistor for LED",
+      "pins": { "1": "GPIO_2", "2": "LED_A" }
+    },
+
+    "D1": {
+      "type": "led",
+      "vf": 2.0,
+      "color": "red",
+      "pins": { "A": "LED_A", "K": "GND" }
+    }
+  }
+}

@@ -416,6 +416,27 @@ class PassiveModel:
             v_b = vmap.get(r.net_b, 0.0)
             r.tick(v_a, v_b)
 
+            # Propagate voltage through the resistor from the externally driven
+            # side to the floating side.  This handles the common series-R case
+            # (GPIO → R → LED → GND) where one end has an active driver and the
+            # other end has nothing else connected yet.
+            key = f"_res_{r.id}"
+
+            def _ext(net_name: str) -> bool:
+                ns = gpio_bus._nets.get(net_name)
+                return bool(ns and any(k != key for k in ns._drivers))
+
+            a_driven = _ext(r.net_a)
+            b_driven = _ext(r.net_b)
+
+            if a_driven and not b_driven:
+                gpio_bus.drive(r.net_b, key, v_a)
+            elif b_driven and not a_driven:
+                gpio_bus.drive(r.net_a, key, v_b)
+            else:
+                gpio_bus.release(r.net_b, key)
+                gpio_bus.release(r.net_a, key)
+
         for c in self.capacitors:
             v_pos = vmap.get(c.net_pos, 0.0)
             v_neg = vmap.get(c.net_neg, 0.0)

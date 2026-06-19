@@ -67,15 +67,39 @@ class SimRunner:
         nodes = list(self.bus._nodes.values())
         self.physics.load(nodes, self._netlist)
 
-    def _auto_instantiate(self):
+    def load_circuit(self, circuit: dict, skip_refs: set[str] | None = None):
+        """
+        Wire the simulation from a circuit dict (parsed from a circuit.json).
+
+        Equivalent to load() but takes a hand-written circuit definition instead
+        of a KiCad schematic.  skip_refs names parts to skip during
+        auto-instantiation — typically the MCU when C++ firmware replaces it.
+        """
+        from core.circuit import to_netlist
+        self._netlist = to_netlist(circuit)
+        self.bus.load_netlist(self._netlist)
+
+        # Drive explicit power rails (overrides the bus's auto-detected names)
+        for net_name, voltage in circuit.get("power", {}).items():
+            self.bus.gpio.drive(net_name, "_pwr", float(voltage))
+
+        self._auto_instantiate(skip_refs=skip_refs)
+        nodes = list(self.bus._nodes.values())
+        self.physics.load(nodes, self._netlist)
+
+    def _auto_instantiate(self, skip_refs: set[str] | None = None):
         """
         For every IC component in the netlist, instantiate its Node subclass
         (if registered), register it on the bus, then call attach() and reset()
         so MCU nodes can build their PinMap and shim before the first tick.
+        skip_refs: references to skip (e.g. the MCU when C++ firmware drives it).
         """
+        skip = skip_refs or set()
         if not self._netlist:
             return
         for ref, comp in self._netlist.components.items():
+            if ref in skip:
+                continue
             lib_id = comp.get("part", "")
             node_class = registry.resolve(ref, lib_id)
             if node_class is None:

@@ -179,3 +179,7 @@ def get_entry(lib_id: str) -> PartEntry | None:
 
 def i2c_address(lib_id: str) -> int | None:
     return _registry.i2c_address(lib_id)
+
+
+def spi_cs_pin(lib_id: str) -> str:
+    return _registry.spi_cs_pin(lib_id)
