@@ -19,16 +19,45 @@ from dataclasses import dataclass, field
 
 
 class Cap(Flag):
-    """Pin capability flags."""
+    """
+    Pin capability flags.
+
+    Specific sub-types (ADC1, SPI1, UART0 etc.) identify which hardware
+    controller a pin belongs to. Generic aliases (ADC, SPI, UART, I2C) are
+    the union of all sub-types and remain valid for backward-compat checks.
+
+    Use specific flags in descriptor pin_caps when the controller matters
+    (e.g. ADC2 conflicts with WiFi on ESP32). Use the generic alias when
+    you only care whether the capability exists at all.
+    """
     DIGITAL_IN  = auto()
     DIGITAL_OUT = auto()
-    ADC         = auto()
-    DAC         = auto()
-    PWM         = auto()
-    SPI         = auto()
-    I2C         = auto()
-    UART        = auto()
-    INPUT_ONLY  = auto()   # cannot be driven as output (ESP32 GPIO34-39)
+
+    # ADC controllers
+    ADC1 = auto()   # e.g. GPIO32-39 on ESP32
+    ADC2 = auto()   # e.g. GPIO0,2,4,12-15,25-27 on ESP32 (conflicts with WiFi)
+    ADC  = ADC1 | ADC2
+
+    DAC  = auto()
+    PWM  = auto()
+
+    # SPI controllers
+    SPI1 = auto()   # e.g. HSPI on ESP32 (default: MISO=12,MOSI=13,CLK=14,CS=15)
+    SPI2 = auto()   # e.g. VSPI on ESP32 (default: MISO=19,MOSI=23,CLK=18,CS=5)
+    SPI  = SPI1 | SPI2
+
+    # I2C controllers
+    I2C0 = auto()
+    I2C1 = auto()
+    I2C  = I2C0 | I2C1
+
+    # UART controllers
+    UART0 = auto()
+    UART1 = auto()
+    UART2 = auto()
+    UART  = UART0 | UART1 | UART2
+
+    INPUT_ONLY = auto()   # no output driver — cannot be driven (ESP32 GPIO34-39)
 
     DIGITAL = DIGITAL_IN | DIGITAL_OUT
     ANY     = DIGITAL | ADC | DAC | PWM | SPI | I2C | UART
@@ -118,12 +147,25 @@ def _parse_caps(cap_list: list[str]) -> Cap:
     mapping = {
         "digital_in":  Cap.DIGITAL_IN,
         "digital_out": Cap.DIGITAL_OUT,
+        # ADC — use specific controller when it matters
         "adc":         Cap.ADC,
+        "adc1":        Cap.ADC1,
+        "adc2":        Cap.ADC2,
         "dac":         Cap.DAC,
         "pwm":         Cap.PWM,
+        # SPI — use specific controller to distinguish buses
         "spi":         Cap.SPI,
+        "spi1":        Cap.SPI1,
+        "spi2":        Cap.SPI2,
+        # I2C
         "i2c":         Cap.I2C,
+        "i2c0":        Cap.I2C0,
+        "i2c1":        Cap.I2C1,
+        # UART — use specific controller to enforce correct TX/RX assignment
         "uart":        Cap.UART,
+        "uart0":       Cap.UART0,
+        "uart1":       Cap.UART1,
+        "uart2":       Cap.UART2,
         "input_only":  Cap.INPUT_ONLY,
     }
     result = Cap(0)

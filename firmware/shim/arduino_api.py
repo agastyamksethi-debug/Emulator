@@ -234,11 +234,18 @@ class ArduinoShim:
         self._bus = bus
         self._runner = runner
         self._pin_map = pin_map
-        self._adc_max = (1 << adc_bits) - 1
+        self._adc_max  = (1 << adc_bits) - 1
         self._adc_vref = adc_vref
-        self._dac_max = (1 << dac_bits) - 1
+        self._dac_max  = (1 << dac_bits) - 1
         self._pin_modes: dict[int, int] = {}
-        self._cs_pins: set[int] = set()   # pins currently used as SPI CS
+        self._cs_pins:   set[int] = set()
+
+        # ADC attenuation per pin — maps pin → effective full-scale voltage.
+        # Default = adc_vref (11 dB / full-range). Set via analogSetAttenuation().
+        self._adc_attenuations: dict[int, float] = {}
+
+        # Set True to simulate WiFi active — blocks ADC2 reads
+        self.wifi_active: bool = False
 
         # Public API objects (match Arduino global variable names)
         self.Wire    = _Wire(bus, pin_map)
@@ -288,23 +295,57 @@ class ArduinoShim:
     # ----------------------------------------------------------- ADC ---------
 
     def analogRead(self, pin: int) -> int:
-        """Returns 0–4095 (12-bit) proportional to net voltage / adc_vref."""
+        """Returns 0–adc_max proportional to net voltage / adc_vref."""
         from firmware.shim.pin_map import Cap
         if not self._pin_map.has_cap(pin, Cap.ADC):
             raise SimPinError(f"GPIO{pin} does not have ADC capability")
+        if (self._pin_map.has_cap(pin, Cap.ADC2)
+                and not self._pin_map.has_cap(pin, Cap.ADC1)
+                and self.wifi_active):
+            raise SimPinError(
+                f"GPIO{pin} is ADC2 — unavailable while WiFi is active")
         net = self._pin_map.net(pin)
         if net is None:
             return 0
-        voltage = self._bus.read_voltage(net)
-        raw = int(voltage / self._adc_vref * self._adc_max)
+        v_range = self._adc_attenuations.get(pin, self._adc_vref)
+        voltage  = self._bus.read_voltage(net)
+        raw      = int(voltage / v_range * self._adc_max)
         return max(0, min(self._adc_max, raw))
+
+    def adc1Read(self, pin: int) -> int:
+        """Explicit ADC1 read — raises SimPinError if pin is not ADC1."""
+        from firmware.shim.pin_map import Cap
+        if not self._pin_map.has_cap(pin, Cap.ADC1):
+            raise SimPinError(
+                f"GPIO{pin} is not an ADC1 pin — check pin_caps in descriptor")
+        return self.analogRead(pin)
 
     def analogReadMilliVolts(self, pin: int) -> int:
         voltage = self._bus.read_voltage(self._pin_map.net(pin) or "")
         return int(voltage * 1000)
 
+    # ADC attenuation constants (ESP32 adc_attenuation_t)
+    ADC_ATTEN_DB_0   = 0   # full-scale ≈ 1.1 V
+    ADC_ATTEN_DB_2_5 = 1   # full-scale ≈ 1.5 V
+    ADC_ATTEN_DB_6   = 2   # full-scale ≈ 2.2 V
+    ADC_ATTEN_DB_11  = 3   # full-scale ≈ 3.3 V (default)
+
+    _ATTEN_VRANGE = {0: 1.1, 1: 1.5, 2: 2.2, 3: 3.3}
+
     def analogSetAttenuation(self, attenuation: int):
-        pass   # ESP32-specific — no-op in simulation
+        """Set attenuation for all ADC pins on this MCU."""
+        v = self._ATTEN_VRANGE.get(attenuation, self._adc_vref)
+        from firmware.shim.pin_map import Cap
+        for info in self._pin_map.all_pins():
+            if info.caps & Cap.ADC:
+                self._adc_attenuations[info.gpio] = v
+
+    def analogSetPinAttenuation(self, pin: int, attenuation: int):
+        """Set attenuation for a single ADC pin."""
+        from firmware.shim.pin_map import Cap
+        if not self._pin_map.has_cap(pin, Cap.ADC):
+            raise SimPinError(f"GPIO{pin} does not have ADC capability")
+        self._adc_attenuations[pin] = self._ATTEN_VRANGE.get(attenuation, self._adc_vref)
 
     # ----------------------------------------------------------- DAC ---------
 
