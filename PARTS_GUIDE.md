@@ -1,130 +1,61 @@
 # PCB Simulator — Part Authoring Guide
 
-This document is the complete specification for creating a new part for the simulator.
-It is written for both human developers and AI models. Follow it exactly — the simulator
-core will not work correctly with parts that deviate from this contract.
+This document defines the exact file format and contract every part must
+follow so the simulator can auto-instantiate it from a KiCad schematic.
+It is written to be handed to any person or model — if you follow every
+section in order, the resulting part will work without modification.
 
 ---
 
-## Table of Contents
+## How a Part Is Used at Runtime
 
-1. [Part Classifications](#1-part-classifications)
-2. [Directory Structure](#2-directory-structure)
-3. [descriptor.json — Full Schema](#3-descriptorjson--full-schema)
-4. [Node Subclass Requirements by Type](#4-node-subclass-requirements-by-type)
-5. [Extracting Data from Datasheets](#5-extracting-data-from-datasheets)
-6. [Registering a Part](#6-registering-a-part)
-7. [Naming Conventions](#7-naming-conventions)
-8. [Worked Examples](#8-worked-examples)
+When `SimRunner.load("board.kicad_sch")` is called:
+
+1. The KiCad schematic is parsed into a netlist (components + nets).
+2. For every IC component found, its `lib_id` is looked up in the registry.
+3. If a match is found, the corresponding `Node` class is instantiated using
+   the part's `descriptor.json`.
+4. Each node is attached to the bus (I2C, SPI, GPIO, UART) based on its
+   descriptor fields.
+5. Pin-to-net mappings are resolved so the shim can route firmware API calls
+   to the correct bus nets.
+
+This means `descriptor.json` is not documentation — the simulator reads it
+directly. Every field has a functional effect. Missing required fields cause
+the part to fail to load.
 
 ---
 
 ## 1. Part Classifications
 
-Every part falls into exactly one primary classification. This determines which
-base interface it must implement and how the simulator instantiates it.
+Pick exactly one. This determines which Node methods you must implement.
 
-### 1.1 MCU (Microcontroller)
-**Reference prefix:** `U`
-**KiCad lib_id examples:** `MCU_Espressif:ESP32-WROOM-32`, `MCU_Microchip_AVR:ATmega328P`
+| Classification | Ref prefix | Needs `model.py` | Description |
+|---|---|---|---|
+| MCU | `U` | Yes — complex | Runs firmware via Arduino shim |
+| Sensor | `U` | Yes | Register map + injectable measurement values |
+| Display / Output IC | `U` | Yes | Framebuffer or output state, no rendering |
+| Interface IC | `U` | Yes | Protocol bridge or converter behaviour |
+| Power IC | `U` | Yes — simple | Drives a regulated rail voltage onto the bus |
+| Discrete | `D`, `LED`, `Q` | Yes — simple | Threshold/switch model (diode, transistor) |
+| Passive | `R`, `C`, `L`, `FB` | **No** | Auto-handled by `physics/passive.py` |
+| Connector | `J` | **No** | Inert — nets pass straight through |
+| Crystal / Oscillator | `Y`, `X` | **No** | Assumed always-on clock source |
 
-The MCU is the only part that *runs firmware*. It owns an `ArduinoShim` instance
-and a `PinMap`. Its `tick()` does not need to advance firmware — firmware runs via
-the shim when called by the runner. The MCU node's job is to:
-- Hold the GPIO pin-to-net mapping for its instance
-- Validate every firmware API call against its pin capabilities
-- Drive net voltages on its output pins via the shim
-
-MCU parts are the most complex to author. They require a complete `gpio_map` and
-`pin_caps` table in the descriptor.
-
-### 1.2 Sensor (I2C or SPI)
-**Reference prefix:** `U`
-**Examples:** MPU6050, ADS1115, BMP280, BME688, MAX31855
-
-A sensor responds to I2C or SPI transactions from the MCU firmware. It has an
-internal register map that the firmware reads and writes. The simulation model
-stores either:
-- **Injected values** — test code sets `node.inject(accel_x=1.2)` to fake sensor data
-- **Computed values** — the model calculates output from physics state (e.g. temperature
-  from the thermal model feeds a temperature sensor)
-
-Sensors never initiate communication. They only respond.
-
-### 1.3 Display / Output IC
-**Reference prefix:** `U`
-**Examples:** ST7789, SSD1306, WS2812 (NeoPixel), TM1637
-
-Receives data from the MCU and produces a visible output. The simulation model
-maintains a framebuffer or output state that the test harness or UI can read.
-The model must not depend on pygame or any UI library — rendering is the
-consumer's job. The model just holds the state.
-
-### 1.4 Interface IC
-**Reference prefix:** `U`
-**Examples:** XPT2046 (touch), MCP2515 (CAN), W5500 (Ethernet), CH340 (USB-UART)
-
-Bridges two protocols or provides a specific interface. Models the protocol
-conversion behaviour and any buffering. The XPT2046 for example receives SPI
-commands and returns ADC values for touch coordinates.
-
-### 1.5 Power IC
-**Reference prefix:** `U`
-**Examples:** AMS1117 (LDO), TPS63020 (buck-boost), INA219 (current sense)
-
-Regulates or monitors power rails. In the simulator, power ICs are modelled
-lightly — they drive their output net to a constant voltage (derived from
-input voltage and their regulation ratio). They do not need full switching
-simulation. Current-sense ICs (INA219) are full sensor models.
-
-### 1.6 Passive
-**Reference prefixes:** `R`, `C`, `L`, `FB`
-
-Handled entirely by `physics/passive.py`. **You do not write a Node subclass for
-passives.** The `PassiveModel` auto-instantiates them from the netlist using the
-reference designator and value string. You only need to add entries to the part
-registry if you want a non-standard value parser or thermal data.
-
-Ferrite beads (`FB`) are modelled as inductors with DCR. At DC they are
-resistors; the full RL model handles transition.
-
-### 1.7 Discrete Semiconductor
-**Reference prefixes:** `D`, `LED`, `Q`
-
-- **Diode / LED:** two-terminal, non-linear. Model as a voltage-threshold device
-  (Vf = 0.7 V for silicon, 2.0–3.5 V for LED depending on colour). Above threshold,
-  net voltage is clamped. Below, it is open.
-- **Transistor (BJT/FET):** three-terminal switch or amplifier. Model as a
-  voltage-controlled switch: if Vbe > 0.7 V (BJT) or Vgs > Vth (FET), collector/drain
-  is pulled toward emitter/source.
-
-These require a `Node` subclass but are simpler than ICs.
-
-### 1.8 Connector
-**Reference prefix:** `J`
-
-No simulation model needed. Connectors are inert — they just pass signals through.
-Do not create a Node subclass. The bus treats connector pins as net aliases.
-
-### 1.9 Crystal / Oscillator
-**Reference prefix:** `Y`, `X`
-
-No simulation model needed. Crystals drive a clock net at their nominal frequency.
-The simulator does not model clock domains — they are treated as always-running.
+Passives, connectors, and crystals need a `descriptor.json` only if you want
+thermal tracking — they never need a `model.py`.
 
 ---
 
-## 2. Directory Structure
-
-Every part lives in its own subdirectory under `parts/`:
+## 2. Directory and File Structure
 
 ```
 parts/
-  <part_name>/
-    descriptor.json       ← REQUIRED for all parts
-    model.py              ← REQUIRED for all except passives and connectors
-    arduino/              ← REQUIRED for MCU parts only
-      <LibName>.h         ← Arduino-compatible C++ header (same API as shim)
+  <part-name>/
+    descriptor.json     ← REQUIRED for every part
+    model.py            ← REQUIRED for all active parts (see table above)
+    arduino/            ← REQUIRED for MCU parts only
+      <LibName>.h
       library.properties
       keywords.txt
       examples/
@@ -132,647 +63,673 @@ parts/
           <ExampleName>.ino
 ```
 
-**Part name convention:** lowercase, hyphens for spaces. Use the IC part number.
-```
-parts/
-  mpu6050/
-  ads1115/
-  esp32-wroom-32/
-  st7789/
-  xpt2046/
-  ina219/
-```
+**Naming rules**
+- `<part-name>`: lowercase, hyphens only, use the IC part number exactly.
+  Examples: `mpu-6050`, `ads1115`, `esp32-wroom-32`, `ina226`.
+- The `<part-name>` directory name must match the `PART_ID` constant in
+  `model.py` and the `parts.<part-name>.model` path in `descriptor.json`.
 
 ---
 
-## 3. descriptor.json — Full Schema
+## 3. `descriptor.json` — Complete Field Reference
 
-Every field is documented below. Fields marked **REQUIRED** must be present.
-Fields marked *optional* may be omitted; defaults are shown.
+All fields and their exact effect on the simulator are described below.
+**REQUIRED** fields are mandatory. Optional fields improve accuracy but have
+safe defaults where noted.
 
 ```jsonc
 {
-  // ── Identity ─────────────────────────────────────────────────────────────
+  // ─────────────────────────────────────────────────────────────
+  // IDENTITY
+  // Used for display, error messages, and registry lookup.
+  // ─────────────────────────────────────────────────────────────
 
-  "part": "MPU-6050",           // REQUIRED. Exact manufacturer part number.
-  "manufacturer": "TDK InvenSense",  // REQUIRED.
-  "description": "6-axis IMU, 3-axis gyro + 3-axis accelerometer, I2C",
-                                // REQUIRED. One line, include protocol.
-  "classification": "sensor",   // REQUIRED. One of:
-                                //   mcu | sensor | display | interface |
-                                //   power_ic | discrete | passive |
-                                //   connector | crystal
-  "protocol": "I2C",            // REQUIRED. One of: I2C | SPI | UART |
-                                //   GPIO | SPI+GPIO | I2C+GPIO | none
-  "datasheet": "https://...",   // URL or filename in parts/<name>/
+  "part": "<MANUFACTURER_PART_NUMBER>",
+  // REQUIRED. Exact string from the datasheet cover page.
+  // Use the base part number — omit temperature/package suffixes.
 
-  // ── Package / Visual ─────────────────────────────────────────────────────
+  "manufacturer": "<COMPANY_NAME>",
+  // REQUIRED. Manufacturer name as printed on the datasheet.
 
-  "package": "QFN-24",          // REQUIRED. JEDEC package name.
-  "visual": {                   // optional. Used by UI renderers.
-    "width_mm": 4.0,
-    "height_mm": 4.0,
+  "description": "<one-line description including protocol>",
+  // REQUIRED. E.g. "16-bit ADC, I2C, 4-channel" or "32-bit MCU, WiFi+BT, SPI/I2C/UART".
+
+  "classification": "<see section 1 table>",
+  // REQUIRED. Must be one of: MCU, Sensor, Display, Interface, Power, Discrete,
+  // Passive, Connector, Crystal.
+
+  "protocol": "<primary bus>",
+  // REQUIRED. I2C | SPI | UART | GPIO | SPI+GPIO | none
+  // Use "SPI+GPIO" when both SPI data and separate GPIO control pins are needed.
+
+  "datasheet": "<URL or filename>",
+  // URL to the datasheet PDF, or a local filename if saved in the part directory.
+
+
+  // ─────────────────────────────────────────────────────────────
+  // PACKAGE
+  // ─────────────────────────────────────────────────────────────
+
+  "package": "<JEDEC-package-name>",
+  // REQUIRED. Standard package name, e.g. "SOIC-8", "QFN-24", "TO-220", "BGA-48".
+  // Find this in the datasheet ordering information or package outline section.
+
+  "visual": {
+    "width_mm": 0.0,
+    "height_mm": 0.0,
     "color": "#2a2a2a"
   },
+  // Optional. Physical size from the package outline drawing.
+  // Used by UI renderers — has no effect on electrical simulation.
 
-  // ── Electrical ───────────────────────────────────────────────────────────
 
-  "vdd_min": 2.375,             // REQUIRED. Minimum supply voltage (V).
-  "vdd_max": 3.46,              // REQUIRED. Maximum supply voltage (V).
-  "vdd_nom": 3.3,               // optional. Nominal operating voltage (V).
-  "idd_ua": 3900,               // optional. Typical supply current (µA).
+  // ─────────────────────────────────────────────────────────────
+  // ELECTRICAL
+  // From the "Absolute Maximum Ratings" or "Electrical Characteristics" table.
+  // ─────────────────────────────────────────────────────────────
 
-  // ── Pins ─────────────────────────────────────────────────────────────────
+  "vdd_min": 0.0,    // REQUIRED. Minimum VDD (V). Below this = under-voltage warning.
+  "vdd_max": 0.0,    // REQUIRED. Maximum VDD (V). Above this = over-voltage warning.
+  "vdd_nom": 0.0,    // Optional. Typical operating voltage.
+  "idd_ua":  0,      // Optional. Typical supply current in µA (used for thermal model).
+
+
+  // ─────────────────────────────────────────────────────────────
+  // PINS
   //
-  // Map every pin name to its role. Pin names must match the KiCad symbol
-  // exactly (check the .kicad_sym file or the symbol in your schematic).
+  // Maps every pin to a functional type so the bus can route signals correctly.
   //
-  // Pin types:
-  //   power        — VDD, VCC, VDDIO etc.
-  //   ground       — GND, VSS, AGND etc.
-  //   i2c_sda      — I2C data
-  //   i2c_scl      — I2C clock
-  //   spi_cs       — SPI chip select (active low)
-  //   spi_clk      — SPI clock
-  //   spi_mosi     — SPI MOSI (SDI, DIN, SDA in write-only SPI)
-  //   spi_miso     — SPI MISO (SDO, DOUT)
-  //   gpio         — general purpose digital I/O
-  //   gpio_out     — digital output only
-  //   gpio_in      — digital input only
-  //   adc_in       — analog input
-  //   interrupt    — interrupt output (active low unless noted)
-  //   reset        — hardware reset (active low unless noted)
-  //   nc           — no connect
-  //   address      — I2C address select pin (tied HIGH or LOW)
+  // IMPORTANT: The key (e.g. "VDD", "SCL") MUST EXACTLY MATCH the pin name
+  // shown in the KiCad symbol (.kicad_sch). Open the schematic, click the
+  // component, read each pin label — those strings go here verbatim.
+  // A mismatch means the bus cannot resolve the pin and will silently ignore it.
+  //
+  // Valid pin types:
+  //   power       — supply voltage input pin
+  //   ground      — ground pin
+  //   i2c_sda     — I2C data line
+  //   i2c_scl     — I2C clock line
+  //   spi_cs      — SPI chip select
+  //   spi_clk     — SPI clock
+  //   spi_mosi    — SPI master-out / slave-in
+  //   spi_miso    — SPI master-in / slave-out
+  //   gpio        — bidirectional general purpose IO
+  //   gpio_in     — input-only GPIO
+  //   gpio_out    — output-only GPIO
+  //   adc_in      — analog input pin
+  //   dac_out     — analog output pin
+  //   interrupt   — IRQ output (active-low unless noted)
+  //   reset       — hardware reset input (active-low unless noted)
+  //   address     — I2C address select pin (logic level sets address LSBs)
+  //   enable      — chip enable / shutdown pin
+  //   nc          — no-connect, ignored by simulator
+  // ─────────────────────────────────────────────────────────────
 
   "pins": {
-    "VDD":   { "type": "power",   "voltage": 3.3 },
-    "GND":   { "type": "ground" },
-    "SDA":   { "type": "i2c_sda" },
-    "SCL":   { "type": "i2c_scl" },
-    "AD0":   { "type": "address", "note": "LOW=0x68, HIGH=0x69" },
-    "INT":   { "type": "interrupt", "active": "low" },
-    "FSYNC": { "type": "gpio_in",  "note": "Frame sync; tie to GND if unused" },
-    "CPUM":  { "type": "nc" }
+    "<KiCad-pin-name>": {
+      "type": "<pin-type-from-list-above>",
+      "voltage": 3.3,         // Optional — for power pins: the rail voltage this pin supplies.
+      "active": "low",        // Optional — for interrupt/reset pins: polarity.
+      "note": "<freeform>"    // Optional — any clarifying note.
+    }
+    // Add one entry for every pin on the device.
+    // NC and tied pins should still be listed with type "nc".
   },
 
-  // ── I2C Configuration ─────────────────────────────────────────────────────
-  // Include this block for all I2C devices.
+
+  // ─────────────────────────────────────────────────────────────
+  // I2C BLOCK
+  // Include only for I2C devices. Omit entirely for SPI/UART/GPIO parts.
+  //
+  // How it is used: the bus reads "address_default" to route i2c_write()
+  // and i2c_read() calls to this node. If an address-select pin (like ADDR
+  // or ADx) is present in the schematic, the bus resolves its net voltage
+  // and may use "address_alt" instead.
+  // ─────────────────────────────────────────────────────────────
 
   "i2c": {
-    "address_default": "0x68",   // REQUIRED for I2C. 7-bit, as hex string.
-    "address_alt": "0x69",       // optional. Alternate address when AD0=HIGH.
-    "address_pin": "AD0",        // optional. Which pin selects the address.
-    "speed_max_khz": 400         // optional. Max I2C clock (100 or 400 typical).
+    "address_default": "0xNN",  // REQUIRED. 7-bit I2C address, hex string.
+                                 // From datasheet "Serial Bus Address" or "Device Address" table.
+                                 // Include only the 7 address bits (not the R/W bit).
+    "address_alt": "0xNN",      // Optional. Alternate address when address-select pin is HIGH.
+                                 // Include if the device supports multiple addresses via a pin.
+    "address_pin": "<pin-name>",// Optional. Name of the pin that selects the address.
+                                 // Must match a pin listed in "pins" with type "address".
+    "speed_max_khz": 400        // Optional. Maximum I2C clock rate from datasheet. 100 or 400 typical.
   },
 
-  // ── SPI Configuration ─────────────────────────────────────────────────────
-  // Include this block for all SPI devices.
+
+  // ─────────────────────────────────────────────────────────────
+  // SPI BLOCK
+  // Include only for SPI devices. Omit entirely for I2C/UART/GPIO parts.
+  //
+  // How it is used: the bus reads "cs_pin" to identify which net assertion
+  // should trigger spi_transfer() on this node. The SPI mode determines
+  // how the shim configures the SPI peripheral before a transfer.
+  // ─────────────────────────────────────────────────────────────
 
   "spi": {
-    "mode": 0,                   // REQUIRED for SPI. Clock polarity/phase (0–3).
-    "max_speed_hz": 1000000,     // REQUIRED for SPI. Max clock frequency.
-    "cs_pin": "CS",              // REQUIRED for SPI. Name of CS pin (from pins{}).
-    "cs_active": "low",          // optional. Default "low".
-    "word_size": 8               // optional. Default 8 bits.
+    "mode": 0,              // REQUIRED. Clock polarity + phase: 0=(0,0), 1=(0,1), 2=(1,0), 3=(1,1).
+                             // From the datasheet SPI timing diagram: read CPOL and CPHA values.
+    "max_speed_hz": 0,      // REQUIRED. Maximum SPI clock frequency in Hz.
+    "cs_pin": "<pin-name>", // REQUIRED. Pin name of chip select. Must match a pin in "pins".
+    "cs_active": "low",     // Optional. "low" (default) or "high".
+    "word_size": 8          // Optional. Bits per transfer word. Default 8.
   },
 
-  // ── Register Map ──────────────────────────────────────────────────────────
-  // Document every register the simulation model uses. Not every register
-  // in the datasheet — only those your model.py reads or writes.
-  // This section is documentation; the model.py is the implementation.
+
+  // ─────────────────────────────────────────────────────────────
+  // REGISTER MAP
+  // Document only the registers your model actually reads or writes.
+  // Omit registers that the simulation does not touch.
+  //
+  // How it is used: this is documentation for the model author, not
+  // parsed at runtime. The model.py must implement the register behaviour
+  // described here. The "reset_value" here must match what model.reset()
+  // loads into the internal register dict.
+  // ─────────────────────────────────────────────────────────────
 
   "registers": {
-    "0x6B": {
-      "name": "PWR_MGMT_1",
-      "reset_value": "0x40",
-      "fields": {
-        "SLEEP":    { "bit": 6, "note": "1=sleep, 0=active" },
-        "CLKSEL":   { "bits": "2:0", "note": "0=internal 8MHz osc" }
+    "0xNN": {
+      "name": "<REGISTER_NAME>",         // Datasheet register name, UPPER_SNAKE.
+      "reset_value": "0x0000",           // Value after power-on or RST assertion.
+      "note": "<what this register does>",
+      "fields": {                        // Optional. Bit fields within the register.
+        "<FIELD_NAME>": {
+          "bit": 15,                     // Single bit position (0 = LSB).
+          "bits": "14:12",              // OR a range "msb:lsb".
+          "note": "<what this field controls>"
+        }
       }
-    },
-    "0x3B": { "name": "ACCEL_XOUT_H", "note": "High byte of X acceleration" },
-    "0x3C": { "name": "ACCEL_XOUT_L" },
-    "0x43": { "name": "GYRO_XOUT_H",  "note": "High byte of X gyro rate" }
+    }
+    // Repeat for each register the model uses.
   },
 
-  // ── MCU-Specific Fields ───────────────────────────────────────────────────
-  // REQUIRED for classification=mcu only. Omit for all other parts.
+
+  // ─────────────────────────────────────────────────────────────
+  // MCU FIELDS
+  // Include ONLY for MCU classification. Omit for all other part types.
+  //
+  // gpio_map: maps Arduino/firmware GPIO numbers → KiCad pin names.
+  // This is what connects digitalWrite(18, HIGH) to the correct net in
+  // the schematic. Without this, the shim cannot find the net.
+  //
+  // How to build it: open the KiCad symbol, list every GPIO pin label,
+  // then find the matching logical number from the MCU datasheet's
+  // "Pin Multiplexing" or "GPIO Matrix" appendix.
+  // ─────────────────────────────────────────────────────────────
 
   "gpio_map": {
-    // Maps logical GPIO number (as string) to KiCad pin name.
-    // Get KiCad pin names from the symbol in your .kicad_sch file.
-    "0":  "IO0",
-    "1":  "TXD0",
-    "2":  "IO2",
-    "3":  "RXD0",
-    "4":  "IO4",
-    "5":  "IO5",
-    "12": "IO12",
-    "13": "IO13",
-    "14": "IO14",
-    "15": "IO15",
-    "16": "IO16",
-    "17": "IO17",
-    "18": "IO18",
-    "19": "IO19",
-    "21": "IO21",
-    "22": "IO22",
-    "23": "IO23",
-    "25": "IO25",
-    "26": "IO26",
-    "27": "IO27",
-    "32": "IO32",
-    "33": "IO33",
-    "34": "IO34",
-    "35": "IO35",
-    "36": "IO36",
-    "39": "IO39"
+    "<gpio-number-as-string>": "<KiCad-pin-name>"
+    // Example pattern — fill in all GPIO pins from your MCU:
+    // "0":  "IO0",
+    // "1":  "IO1",
+    // "34": "IO34"
+    // One entry per physical GPIO pin. String keys, string values.
   },
+
+  // pin_caps: which capabilities each GPIO supports.
+  // Used by the Arduino shim to enforce correct usage. If firmware calls
+  // analogRead() on a pin not listed with "adc", SimPinError is raised.
+  //
+  // Valid capabilities:
+  //   digital_in   — can be read as digital
+  //   digital_out  — can be driven digital
+  //   adc          — has ADC multiplexer connection
+  //   dac          — has DAC output
+  //   pwm          — has PWM/LEDC timer
+  //   spi          — can be configured as SPI (MOSI/MISO/CLK/CS)
+  //   i2c          — can be configured as I2C (SDA/SCL)
+  //   uart         — can be configured as UART (TX/RX)
+  //   input_only   — physically cannot drive output (e.g. ADC-only pads)
+  //
+  // Find this in the MCU datasheet's pin function table or IO matrix.
 
   "pin_caps": {
-    // Maps GPIO number (as string) to list of capability strings.
-    // Valid strings: digital_in, digital_out, adc, dac, pwm, spi, i2c,
-    //                uart, input_only
-    // input_only pins CANNOT be used as outputs — the shim enforces this.
-    "0":  ["digital_in", "digital_out", "pwm"],
-    "2":  ["digital_in", "digital_out", "pwm", "adc"],
-    "25": ["digital_in", "digital_out", "dac", "pwm"],
-    "34": ["digital_in", "adc", "input_only"],
-    "35": ["digital_in", "adc", "input_only"],
-    "36": ["digital_in", "adc", "input_only"],
-    "39": ["digital_in", "adc", "input_only"]
+    "<gpio-number-as-string>": ["<cap>", "<cap>"]
+    // One entry per GPIO. List every capability the pin supports.
+    // Always include input_only for pads that cannot source current.
   },
 
-  // ── Thermal ───────────────────────────────────────────────────────────────
-  // Used by physics/thermal.py. Get these from the datasheet thermal section.
 
-  "thermal_resistance_c_per_w": 40.0,   // θJA — junction to ambient (°C/W)
-  "thermal_capacitance_j_per_c": 1.0,   // thermal mass (J/°C). Estimate if
-                                         // not in datasheet: 0.1 for small ICs,
-                                         // 1.0 for QFP/QFN, 5.0 for TO-220.
+  // ─────────────────────────────────────────────────────────────
+  // THERMAL
+  // From the "Thermal Characteristics" table in the datasheet.
+  // If the datasheet does not list these, use the package estimates below.
+  // ─────────────────────────────────────────────────────────────
 
-  // ── Simulation Model ──────────────────────────────────────────────────────
+  "thermal_resistance_c_per_w": 0.0,
+  // θJA — junction-to-ambient thermal resistance in °C/W.
+  // Package estimates if not in datasheet:
+  //   SOT-23:     ~300 °C/W
+  //   SOIC-8:     ~150 °C/W
+  //   TSSOP-20:   ~100 °C/W
+  //   QFN-24/32:   ~45 °C/W
+  //   TO-220:      ~10 °C/W
+  //   BGA:          ~20 °C/W
 
-  "simulation_model": "parts.mpu6050.model.MPU6050Node",
-                                // REQUIRED (except passives/connectors).
-                                // Python import path to the Node subclass.
+  "thermal_capacitance_j_per_c": 0.0,
+  // Thermal mass of the package in J/°C.
+  // If not in datasheet, estimate by package size:
+  //   Small SMD (SOT, SOIC-8):  0.1 J/°C
+  //   Medium IC (TSSOP, QFN):   0.5 J/°C
+  //   Large IC (BGA, TO-220):   2.0 J/°C
 
-  // ── Arduino Library ───────────────────────────────────────────────────────
-  // REQUIRED for MCU parts only.
 
-  "arduino_library": "parts/esp32-wroom-32/arduino"
+  // ─────────────────────────────────────────────────────────────
+  // POINTERS — how the runner finds your code
+  // ─────────────────────────────────────────────────────────────
+
+  "simulation_model": "parts.<part-name>.model.<ClassName>Node",
+  // REQUIRED for all active parts. Python dotted import path to the Node class.
+  // Replace <part-name> with your directory name and <ClassName> with your class.
+
+  "arduino_library": "parts/<part-name>/arduino"
+  // REQUIRED for MCU parts only. Path to the Arduino library directory.
 }
 ```
 
 ---
 
-## 4. Node Subclass Requirements by Type
+## 4. `model.py` — Node Subclass Contract
 
-### 4.1 All parts — base requirements
+The Node class is the runtime representation of the part. The bus calls its
+methods directly — the method signatures below are the exact interface the bus
+expects. Do not rename arguments or change return types.
+
+### 4.1 Base — every active part must implement
 
 ```python
 from core.node import Node
 
-class MyPartNode(Node):
-    PART_ID = "my-part"   # matches the parts/ directory name
+class <ClassName>Node(Node):
+    PART_ID = "<part-name>"   # must match the parts/ directory name
 
     def __init__(self, instance_id: str, descriptor: dict):
         super().__init__(instance_id, descriptor)
-        # Initialise your internal state here
-        # DO NOT open files, start threads, or import pygame here
+        # Declare all internal state variables here.
+        # Do NOT open files, start threads, or call bus methods.
 
     def reset(self):
-        # Restore to power-on state
-        # Called by SimRunner.reset() and on hardware reset signal
+        # Restore every internal register to its descriptor "reset_value".
+        # Must be callable multiple times without side effects.
+        # The runner calls reset() after instantiation and after a simulated RST.
         pass
 
     def tick(self, dt_ms: float):
-        # Advance any time-dependent internal state
-        # Keep this fast — it runs every simulation step
-        # Do NOT read/write the bus here; that happens via protocol methods
+        # Advance internal time-dependent state by dt_ms milliseconds.
+        # Example uses: timeout counters, conversion-in-progress flags,
+        # watchdog timers, FIFO aging.
+        # Do NOT call bus read/write methods here.
         pass
 ```
 
-### 4.2 I2C sensor
+### 4.2 I2C sensor/IC — add these methods
+
+The bus calls these when firmware issues `Wire.write()` / `Wire.requestFrom()`.
 
 ```python
-class MPU6050Node(Node):
-    I2C_ADDRESS_DEFAULT = 0x68
+    i2c_address: int = 0x00   # Set to address_default from descriptor.
+                               # If the part has an address-select pin,
+                               # override this in __init__ after reading
+                               # the pin net voltage from the bus.
 
-    def __init__(self, instance_id, descriptor):
-        super().__init__(instance_id, descriptor)
-        # I2C address: check AD0 pin net voltage after netlist loads
-        self.i2c_address = self.I2C_ADDRESS_DEFAULT
-        self._regs = bytearray(128)         # register file
-        self._regs[0x6B] = 0x40            # PWR_MGMT_1 reset value: SLEEP=1
-        self._regs[0x75] = 0x68            # WHO_AM_I
+    def i2c_write(self, address: int, register: int, data: bytes) -> None:
+        # Called when the MCU writes to this device.
+        # 'register' is the first byte the MCU sent (the register pointer).
+        # 'data' is every byte after that.
+        # Store data into your internal register file starting at 'register'.
+        # For write-only bits (e.g. config write triggers a hardware action),
+        # decode the config and update internal state accordingly.
+        pass
 
-        # Injectable sensor values — set from test code
-        self.accel = [0.0, 0.0, 1.0]      # x, y, z in g (1g default Z)
-        self.gyro  = [0.0, 0.0, 0.0]      # x, y, z in deg/s
-        self.temperature_c = 25.0
+    def i2c_read(self, address: int, register: int, length: int) -> bytes:
+        # Called when the MCU reads from this device.
+        # Return exactly 'length' bytes from your register file starting
+        # at 'register'. The format (endianness, signed/unsigned) must
+        # match what the real device returns per the datasheet.
+        return bytes(length)
 
-    def inject(self, **kwargs):
-        # Test code calls: node.inject(accel_x=0.5, gyro_z=90.0)
-        if "accel_x" in kwargs: self.accel[0] = kwargs["accel_x"]
-        if "accel_y" in kwargs: self.accel[1] = kwargs["accel_y"]
-        if "accel_z" in kwargs: self.accel[2] = kwargs["accel_z"]
-        if "gyro_x"  in kwargs: self.gyro[0]  = kwargs["gyro_x"]
-        if "gyro_y"  in kwargs: self.gyro[1]  = kwargs["gyro_y"]
-        if "gyro_z"  in kwargs: self.gyro[2]  = kwargs["gyro_z"]
-
-    def tick(self, dt_ms):
-        # Pack injected values into register file each tick
-        # so that the firmware always reads current data
-        self._pack_accel()
-        self._pack_gyro()
-
-    def i2c_write(self, address, register, data):
-        # Store written bytes into register file
-        for i, byte in enumerate(data):
-            if register + i < len(self._regs):
-                self._regs[register + i] = byte & 0xFF
-
-    def i2c_read(self, address, register, length):
-        end = min(register + length, len(self._regs))
-        return bytes(self._regs[register:end])
-
-    def _pack_accel(self):
-        # Convert g to raw 16-bit signed int (±2g range, sensitivity 16384 LSB/g)
-        for i, (val, base) in enumerate(
-                zip(self.accel, [0x3B, 0x3D, 0x3F])):
-            raw = int(val * 16384)
-            raw = max(-32768, min(32767, raw))
-            self._regs[base]   = (raw >> 8) & 0xFF
-            self._regs[base+1] = raw & 0xFF
-
-    def _pack_gyro(self):
-        # 131 LSB/(deg/s) at ±250 deg/s range
-        for i, (val, base) in enumerate(
-                zip(self.gyro, [0x43, 0x45, 0x47])):
-            raw = int(val * 131)
-            raw = max(-32768, min(32767, raw))
-            self._regs[base]   = (raw >> 8) & 0xFF
-            self._regs[base+1] = raw & 0xFF
+    def inject(self, **kwargs) -> None:
+        # Test hook: set the physical quantity the sensor is measuring.
+        # kwargs are part-specific (e.g. temperature_c=25.0, voltage_v=3.3).
+        # Store them and have tick() or i2c_read() pack them into the
+        # output register using the sensitivity/LSB scale from the datasheet.
+        pass
 ```
 
-### 4.3 SPI sensor / display
+### 4.3 SPI sensor/IC — add these methods
+
+The bus calls these when the MCU asserts the CS net and calls `SPI.transfer()`.
 
 ```python
-class ADS1118Node(Node):
-    def __init__(self, instance_id, descriptor):
-        super().__init__(instance_id, descriptor)
-        self._config = 0x8583    # default config register
-        self._input_voltage = [0.0, 0.0, 0.0, 0.0]   # AIN0–3 (V)
-
-    def inject(self, channel: int, voltage: float):
-        self._input_voltage[channel] = voltage
-
-    def spi_transfer(self, cs_pin, data: bytes) -> bytes:
-        # SPI devices receive a command and return data simultaneously
-        # Parse the incoming bytes, return the response bytes
-        if len(data) < 2:
-            return bytes(len(data))
-        cmd = (data[0] << 8) | data[1]
-        # Decode MUX bits [14:12] to select input channel
-        mux = (cmd >> 12) & 0x07
-        channel = mux - 4 if mux >= 4 else 0
-        channel = max(0, min(3, channel))
-        # Convert voltage to 16-bit signed result (±2.048V FSR, 32768 counts)
-        raw = int(self._input_voltage[channel] / 2.048 * 32767)
-        raw = max(-32768, min(32767, raw))
-        return bytes([(raw >> 8) & 0xFF, raw & 0xFF])
-```
-
-### 4.4 Display IC
-
-```python
-class ST7789Node(Node):
-    WIDTH  = 240
-    HEIGHT = 320
-
-    def __init__(self, instance_id, descriptor):
-        super().__init__(instance_id, descriptor)
-        self.framebuffer = bytearray(self.WIDTH * self.HEIGHT * 2)  # RGB565
-        self._cmd = 0x00
-        self._in_data = False
-        self._write_addr = (0, 0, 0, 0)   # x0, y0, x1, y1 window
-
-    def gpio_write(self, pin, value):
-        dc_pin = self.descriptor.get("default_pins_esp32", {}).get("DC")
-        if pin == dc_pin:
-            self._in_data = bool(value)
-
-    def spi_transfer(self, cs_pin, data: bytes) -> bytes:
-        # First byte after DC=LOW is a command; bytes after DC=HIGH are data
-        for byte in data:
-            if not self._in_data:
-                self._cmd = byte
-                self._handle_command(byte)
-            else:
-                self._handle_data(byte)
+    def spi_transfer(self, cs_pin: int, data: bytes) -> bytes:
+        # Full-duplex: 'data' is what the MCU sent (MOSI bytes).
+        # Return the same number of bytes (MISO bytes).
+        # Parse the command from data[0] (usually read/write bit + register addr),
+        # then build the response from your internal register file.
+        # Must return bytes of exactly len(data).
         return bytes(len(data))
 
-    def _handle_command(self, cmd): ...
-    def _handle_data(self, byte): ...
-
-    def get_pixel(self, x, y) -> int:
-        idx = (y * self.WIDTH + x) * 2
-        return (self.framebuffer[idx] << 8) | self.framebuffer[idx+1]
+    def gpio_write(self, pin: int, value: int) -> None:
+        # Called when the MCU drives a GPIO that connects to this part.
+        # Handle control pins such as:
+        #   - D/C (data/command selector on displays)
+        #   - RST (reset assertion — call self.reset() when RST goes low)
+        #   - EN or SHDN (enable/shutdown lines)
+        # 'pin' is the GPIO number from the MCU's gpio_map.
+        # 'value' is 0 (LOW) or 1 (HIGH).
+        pass
 ```
 
-### 4.5 MCU node
+### 4.4 MCU — add these methods
+
+The runner calls `attach()` once after netlist load. Firmware is loaded
+separately and called by the runner's tick loop.
 
 ```python
-from firmware.shim.pin_map import PinMap
-from firmware.shim.arduino_api import ArduinoShim
-
-class ESP32Node(Node):
-    def __init__(self, instance_id, descriptor):
-        super().__init__(instance_id, descriptor)
-        self._pin_map: PinMap | None = None
-        self.shim: ArduinoShim | None = None
-        self._firmware = None   # set by runner before first tick
-
-    def attach(self, netlist, bus, runner):
-        # Called by runner after load_netlist()
+    def attach(self, netlist, bus, runner) -> None:
+        # Build the PinMap and ArduinoShim that all firmware calls go through.
+        # This must be called before load_firmware().
+        from firmware.shim.pin_map import PinMap
+        from firmware.shim.arduino_api import ArduinoShim
         self._pin_map = PinMap(self.id, netlist, self.descriptor)
         self.shim = ArduinoShim(
             node_id=self.id,
             bus=bus,
             runner=runner,
             pin_map=self._pin_map,
-            adc_bits=12,
-            adc_vref=3.3,
+            adc_bits=<N>,        # resolution from datasheet, e.g. 12
+            adc_vref=<V>,        # reference voltage from datasheet, e.g. 3.3
         )
 
-    def load_firmware(self, setup_fn, loop_fn):
+    def load_firmware(self, setup_fn, loop_fn) -> None:
+        # Accept the two Arduino-style firmware functions.
+        # setup_fn(shim) and loop_fn(shim) will be called by the runner.
         self._firmware = (setup_fn, loop_fn)
 
-    def run_setup(self):
+    def run_setup(self) -> None:
         if self._firmware:
             self._firmware[0](self.shim)
 
-    def run_loop(self):
+    def run_loop(self) -> None:
         if self._firmware:
             self._firmware[1](self.shim)
-
-    def reset(self):
-        if self.shim:
-            self.shim._pin_modes.clear()
 ```
+
+### 4.5 Display / output IC — additional requirement
+
+Keep a framebuffer or output state as a plain Python object (`bytearray`,
+list, dict). Do not render or open windows — the consumer reads state via
+these methods:
+
+```python
+    def get_framebuffer(self) -> bytearray:
+        # Return the raw pixel buffer. Width × height × bytes_per_pixel.
+        ...
+
+    def get_pixel(self, x: int, y: int) -> int:
+        # Return the pixel value at (x, y) in the device's native format.
+        ...
+```
+
+### 4.6 Rules enforced across all models
+
+| Rule | Reason |
+|---|---|
+| `__init__` must call `super().__init__(instance_id, descriptor)` | Base class reads descriptor and sets `self.id`, `self.temperature`, `self.power_dissipation`. |
+| `reset()` must match every "reset_value" in descriptor registers | Firmware often reads these at startup to verify the device is alive. |
+| `tick()` must return quickly | It runs every simulation step — avoid slow loops. |
+| `inject()` must exist on every sensor | Test harnesses call it unconditionally. |
+| No file I/O, threading, or UI inside any method | Models run headless and must be thread-safe-adjacent. |
+| Register packing must match the datasheet byte order | Wrong endianness causes silent read failures in firmware. |
 
 ---
 
-## 5. Extracting Data from Datasheets
+## 5. Extracting What You Need from a Datasheet
 
-This section explains how to read a datasheet and produce a correct descriptor
-and model. Follow each step in order.
+This is a systematic process. Work through each step in order for every new
+part. Stop at any step that does not apply to the part's classification.
 
-### Step 1 — Identify the part and protocol
+---
 
-Open the datasheet. In the first two pages, find:
+### Step 1 — Identity, classification, and protocol
 
-- **Part number** (exact, including package variant if relevant) → `"part"`
-- **Interface** (I2C, SPI, UART, GPIO) → `"protocol"`
-- **Supply voltage range** (min/max/nominal) → `"vdd_min"`, `"vdd_max"`, `"vdd_nom"`
-- **Supply current** (typical, from electrical characteristics table) → `"idd_ua"`
+**Where:** First one or two pages. Product description, features list, ordering
+information.
 
-### Step 2 — Extract the pin table
+**Extract:**
+- Exact part number (omit suffixes for temperature grade and package)
+- The primary communication protocol: I2C, SPI, UART, or GPIO-only
+- Supply voltage range: look for "VDD", "VCC", or "Supply Voltage" in the
+  Absolute Maximum Ratings table. Take V_min and V_max from the Operating
+  Conditions sub-table, not the Absolute Max.
+- Typical supply current: usually labelled I_DD or I_CC in µA or mA.
 
-Find the **Pin Description** or **Pin Configuration** table. It lists every pin
-with name, number, and function. For each pin:
+**Fills:** `part`, `manufacturer`, `classification`, `protocol`, `vdd_min`,
+`vdd_max`, `vdd_nom`, `idd_ua`.
 
-1. Map the function to one of the pin types in the schema above.
-2. Note any special conditions (e.g. "pull HIGH for address 0x69", "active low reset").
-3. Note which pins are configurable (address pins, mode select pins).
+---
 
-**For ICs with many pins** (MCUs especially): you only need to list the pins
-that affect simulation behaviour. NC (no-connect) pins can be listed as `"type": "nc"`
-in bulk without detail.
+### Step 2 — Pin table
 
-### Step 3 — Extract the I2C address (I2C parts)
+**Where:** "Pin Configuration", "Pin Description", or "Package Pinout" section.
+Typically a numbered table with columns: Pin No., Name, Type, Description.
 
-Find the **Serial Interface** or **I2C Address** section. This tells you:
-- The 7-bit base address (e.g. `0x68`)
-- Which pin(s) select the alternate address
-- The range of possible addresses if multiple address pins exist
+**Extract:**
+- Every pin name — these must match the KiCad symbol exactly. Open the
+  `.kicad_sch` file and verify; the symbol author may have renamed or
+  abbreviated pins.
+- Pin direction (input, output, bidirectional, power).
+- Note any pins that are active-low (usually denoted with an overline in the
+  datasheet or a `/` prefix like `/CS`, `/RST`, `/INT`).
+- Note which pins control the I2C address (commonly named ADDR, AD0, SA0,
+  A0/A1/A2 etc.).
 
-Write the default address into `i2c.address_default`. If the address changes
-based on a pin, note the pin name in `i2c.address_pin` and both addresses.
+**Fills:** Every entry in `"pins": {}`.
 
-**AD0/ADDR pin pattern** (very common):
+---
+
+### Step 3 — I2C device address
+
+**Where:** "I2C Interface", "Serial Bus Address", or "Device Address" section.
+There is always a table or formula.
+
+**Extract:**
+The datasheet specifies the 7-bit address as a fixed base with optional LSBs
+set by one or more address-select pins. The format varies by manufacturer but
+the pattern is always the same: a binary address word where some bits are fixed
+and some bits come from pin logic levels.
+
+To find the two (or more) valid addresses:
+1. Locate the binary representation of the 7-bit address. The fixed bits give
+   the base; the variable bits are replaced by the pin state.
+2. For each combination of the address pin(s) being LOW or HIGH, compute the
+   full 7-bit address and convert to hex.
+3. Record `address_default` as the address when all address pins are LOW (or
+   at their default/unconnected state as noted in the datasheet).
+4. Record `address_alt` for the next combination.
+5. If there are multiple address pins (A0, A1, A2), there may be up to 8
+   valid addresses — list the default and note the pattern.
+
+**Fills:** `i2c.address_default`, `i2c.address_alt`, `i2c.address_pin`,
+`i2c.speed_max_khz`.
+
+---
+
+### Step 4 — SPI transaction format
+
+**Where:** "SPI Interface", "Serial Interface", or "Digital Interface" section.
+Look for timing diagrams showing CS, SCLK, MOSI, MISO waveforms with byte
+annotations.
+
+**Extract:**
+
+1. **Clock mode** — find CPOL and CPHA values in the text or timing diagram:
+   - CPOL=0, CPHA=0 → SPI mode 0
+   - CPOL=0, CPHA=1 → SPI mode 1
+   - CPOL=1, CPHA=0 → SPI mode 2
+   - CPOL=1, CPHA=1 → SPI mode 3
+
+2. **Transaction structure** — draw out one complete transaction from the
+   timing diagram. Note:
+   - How many bytes does the master send before the device responds?
+   - What does byte 0 encode? (Usually: read/write bit + register address.)
+   - Are register addresses 7-bit (leaving bit 7 for R/W) or 8-bit with a
+     separate command byte before?
+   - How many bytes of response per register?
+   - Can multiple registers be read in one burst (auto-increment)?
+
+3. **Maximum clock speed** — from the timing diagram parameter table, look for
+   f_SCK or f_SCLK (max).
+
+Your `spi_transfer()` implementation must parse and produce bytes that match
+this transaction format exactly. Wrong byte order or missing the R/W bit are
+the two most common bugs.
+
+**Fills:** `spi.mode`, `spi.max_speed_hz`, `spi.cs_pin`, `spi.word_size`.
+
+---
+
+### Step 5 — Register map
+
+**Where:** "Register Map", "Register Description", or "Memory Map" section.
+Usually a large table near the end of the datasheet.
+
+**Extract only the registers your model will simulate:**
+- Config registers: the ones firmware writes to set measurement range, mode,
+  resolution, sample rate. Your `i2c_write()` / `spi_transfer()` must decode
+  these and update internal state.
+- Output registers: the ones that hold the measurement result. Your `tick()`
+  must pack the current injected value into these on every step.
+- Status registers: any register firmware polls to check "data ready" or
+  "conversion complete". Your model must set the relevant bits when data is
+  ready.
+
+**For each output register, find the LSB weight / sensitivity:**
+
 ```
-AD0 = GND → address = 0x68
-AD0 = VDD → address = 0x69
+This is the most important number in the entire datasheet for a sensor model.
+
+It is usually in the "Electrical Characteristics" table, labelled:
+  "Full-scale range", "Resolution", "LSB weight", or "Sensitivity".
+
+The formula is always:
+  raw_value = int(physical_quantity / lsb_weight)
+
+Example pattern (fill in from your datasheet):
+  If a register holds temperature in units of 0.0625 °C per LSB,
+  then 25 °C → raw = int(25.0 / 0.0625) = 400 = 0x0190.
+
+Getting this wrong produces readings that are off by a constant factor
+and is the most common bug when authoring a sensor part.
 ```
 
-### Step 4 — Extract the register map (I2C / SPI register-based parts)
+**Fills:** `registers` block in descriptor. LSB weights go into model.py
+`inject()` and `tick()` as numeric constants with a comment citing the
+datasheet table and value.
 
-Find the **Register Map** section. You do not need to model every register.
-Identify only the registers that:
+---
 
-a) The firmware you will test reads or writes.
-b) Control the operating mode (power management, config registers).
-c) Contain the output data your model needs to produce (measurement registers).
+### Step 6 — Thermal characteristics
 
-For each relevant register, note:
-- Address (hex)
-- Name
-- Reset value (hex) — your `__init__` must set `self._regs[addr] = reset_value`
-- Bit fields you care about (read the field description, not just the bit table)
+**Where:** "Thermal Characteristics", "Thermal Information", or "Package
+Thermal Resistance" section.
 
-**Scale factors** — the most common source of bugs. For every measurement register:
-- Find the **sensitivity** or **LSB weight** in the electrical characteristics table
-- This gives you the formula: `raw_value = physical_value / sensitivity`
-- Example: MPU6050 accelerometer at ±2g range has sensitivity 16384 LSB/g
-  → `raw = int(accel_g * 16384)` and it must fit in a signed 16-bit integer
+**Extract:**
+- θJA (junction-to-ambient, °C/W) — the thermal resistance from die to
+  ambient air in still air. If the table lists multiple values (different board
+  conditions), use the "high-K" or "standard" condition row.
+- Thermal capacitance (J/°C) — often not listed. Use package size estimate
+  from the descriptor schema if absent.
 
-### Step 5 — Extract SPI transaction format (SPI parts)
+**Fills:** `thermal_resistance_c_per_w`, `thermal_capacitance_j_per_c`.
 
-Find the **SPI Interface** or **Timing Diagrams** section. You need:
+---
 
-- **Clock mode** (CPOL, CPHA → mode 0, 1, 2, or 3) → `spi.mode`
-- **Maximum clock speed** → `spi.max_speed_hz`
-- **Word size** (almost always 8 bits) → `spi.word_size`
-- **Transaction format**: what bytes does the master send, what does the device return?
+### Step 7 — MCU GPIO mapping (MCU parts only)
 
-Draw out the transaction byte-by-byte. Example for ADS1115 in SPI mode:
-```
-Master → [CMD_HIGH, CMD_LOW]    ← config register write
-Slave  → [RESULT_HIGH, RESULT_LOW]  ← previous conversion result
-```
-This is the format your `spi_transfer()` method must implement.
+**Where:** "Pin Multiplexing Table", "GPIO Matrix", "Peripheral Assignment", or
+"IO MUX" appendix. Usually one of the last sections in the datasheet.
 
-### Step 6 — Extract thermal data
+**Extract for every GPIO pin:**
 
-Find the **Package / Thermal Characteristics** section. Look for:
-- **θJA** (theta JA) — junction-to-ambient thermal resistance in °C/W
-  → `"thermal_resistance_c_per_w"`
-- If θJA is not given, use these estimates:
-  - SOT-23, SC-70 (tiny): 250–400 °C/W
-  - SOIC-8: 125–160 °C/W
-  - QFN-16 to QFN-32: 30–60 °C/W
-  - LQFP-48 to LQFP-100: 40–80 °C/W
-  - TO-220 (with heatsink tab): 5–15 °C/W
+1. The logical GPIO number (the number used in firmware: `digitalWrite(N)`).
+2. The KiCad pin name from the KiCad symbol file (`.kicad_sym`). Open it and
+   read the `pin name` fields directly — do not infer from the datasheet alone
+   because symbol authors sometimes use different labels.
+3. Every peripheral function the pin can be assigned to (SPI, I2C, UART, ADC,
+   DAC, PWM).
+4. Whether the pin is input-only (no output driver — common on ADC-only pads).
 
-Thermal capacitance is rarely in datasheets. Use:
-- Small SMD IC (≤ 5mm²): 0.1–0.3 J/°C
-- Medium IC (5–15mm²): 0.5–1.0 J/°C
-- Large IC / MCU module: 1.0–5.0 J/°C
-
-### Step 7 — For MCU parts: build the gpio_map
-
-Find the **Pin Multiplexing** or **GPIO Matrix** appendix. This is the largest
-table in any MCU datasheet. For each GPIO number:
-
-1. Find its KiCad pin name in the KiCad symbol (`*.kicad_sym` file) — it is
-   usually `IOxx` or `GPIOxx`.
-2. Note every peripheral function it can serve (ADC, DAC, UART, SPI, I2C, PWM).
-3. Note input-only pins explicitly — the shim will reject `OUTPUT` mode on these.
-
-**ESP32-specific:** GPIO 34, 35, 36, 39 are input-only. GPIOs 25 and 26 have
-the DAC. GPIOs 32–39 have ADC1; GPIOs 0, 2, 4, 12–15, 25–27 have ADC2
-(ADC2 cannot be used when WiFi is active, but for simulation purposes treat
-all ADC pins equivalently).
+**Fills:** `gpio_map` and `pin_caps` blocks.
 
 ---
 
 ## 6. Registering a Part
 
-After writing the descriptor and model, register the part so the runner can
-auto-instantiate it from a netlist.
-
-In your part's `model.py`, add a module-level registration call at the bottom:
+At the bottom of `model.py`, register the part so the runner can
+auto-instantiate it when it appears in a schematic:
 
 ```python
-# parts/mpu6050/model.py  — bottom of file
-
 import core.registry as registry
 
 registry.register_part(
-    "InvenSense:MPU-6050",          # KiCad lib_id — check your schematic
-    MPU6050Node,
-    i2c_address=0x68,
+    "<Library>:<PartName>",   # KiCad lib_id — read from your .kicad_sch file
+    <ClassName>Node,
+    i2c_address=0xNN,         # include only for I2C parts
 )
-
-# If the same IC appears under multiple lib_ids in different KiCad libraries:
-registry.register_part("Sensor_IMU:MPU-6050", MPU6050Node, i2c_address=0x68)
 ```
 
-Then import the model somewhere before calling `runner.load()`:
+**Finding the `lib_id`:**
+Open the `.kicad_sch` file in a text editor and search for the component.
+The `lib_id` field looks like:
+
+```
+(lib_id "SensorLibrary:MPU-6050")
+```
+
+The string in quotes — `"SensorLibrary:MPU-6050"` — is exactly what goes in
+`register_part()`. It is case-sensitive.
+
+**Triggering registration:**
+Import the model module before calling `runner.load()`. The `register_part()`
+call at module level runs as a side effect of the import:
 
 ```python
-import parts.mpu6050.model    # side-effect: registers the part
+import parts.<part-name>.model   # registers the part
 from core.runner import SimRunner
 
 runner = SimRunner()
-runner.load("my_board.kicad_sch")
+runner.load("board.kicad_sch")
 ```
-
-To find the correct `lib_id` for your part, open the schematic in KiCad,
-click the component, and read the `lib_id` field in the symbol properties.
-It is always in the format `"LibraryName:PartName"`.
 
 ---
 
 ## 7. Naming Conventions
 
-| Thing | Convention | Example |
+| Thing | Rule | Reason |
 |---|---|---|
-| Part directory | lowercase, hyphens | `esp32-wroom-32`, `ads1115` |
-| Node class name | PascalCase + `Node` suffix | `MPU6050Node`, `ADS1115Node` |
-| `PART_ID` attribute | matches directory name | `"ads1115"` |
-| Descriptor keys | snake_case | `"thermal_resistance_c_per_w"` |
-| Register constants | `REG_` prefix, ALL_CAPS | `REG_PWR_MGMT_1 = 0x6B` |
-| Injectable fields | descriptive, snake_case | `self.accel`, `self.temperature_c` |
-| `inject()` kwargs | match field names | `node.inject(temperature_c=50.0)` |
-| KiCad lib_id registration | exact string from schematic | `"Sensor_IMU:MPU-6050"` |
+| Part directory | lowercase, hyphens, IC part number | Must match `PART_ID` and `simulation_model` path |
+| Node class name | PascalCase + `Node` suffix | Distinguishes node classes from other objects |
+| `PART_ID` constant | Exact match to directory name | Used for logging and registry lookup |
+| Register address constants | `REG_` prefix, UPPER_SNAKE | Makes `i2c_write()` code readable |
+| Internal measurement fields | `self.<quantity>_<unit>` | Makes `inject()` kwargs self-documenting |
+| `inject()` keyword args | Match internal field names exactly | Test code discovers them by inspection |
+| KiCad `lib_id` string | Exact copy from `.kicad_sch` | Case-sensitive — one character off = silent miss |
 
 ---
 
-## 8. Worked Examples
+## 8. Checklist Before Committing a Part
 
-### Example A — Simple I2C sensor (ADS1115, 16-bit ADC)
-
-**From the datasheet:**
-- Protocol: I2C
-- Address: 0x48 (ADDR=GND), 0x49 (ADDR=VDD), 0x4A (ADDR=SDA), 0x4B (ADDR=SCL)
-- Registers: Config (0x01), Conversion (0x00), Lo_thresh (0x02), Hi_thresh (0x03)
-- Config reset value: 0x8583
-- Full-scale range: ±2.048V at default PGA setting → 32767 LSB = 2.048V
-- Sensitivity at ±2.048V: 2.048V / 32767 = 62.5 µV/LSB
-
-**descriptor.json (excerpt):**
-```json
-{
-  "part": "ADS1115",
-  "protocol": "I2C",
-  "i2c": { "address_default": "0x48", "address_pin": "ADDR", "speed_max_khz": 400 },
-  "registers": {
-    "0x00": { "name": "CONVERSION",  "note": "16-bit signed result" },
-    "0x01": { "name": "CONFIG",      "reset_value": "0x8583" }
-  }
-}
-```
-
-**model.py key logic:**
-```python
-def i2c_read(self, address, register, length):
-    if register == 0x00:   # CONVERSION register
-        channel = (self._config >> 12) & 0x07  # MUX[14:12]
-        ch = max(0, (channel - 4) if channel >= 4 else 0)
-        raw = int(self.input_voltage[ch] / 2.048 * 32767)
-        raw = max(-32768, min(32767, raw))
-        return bytes([(raw >> 8) & 0xFF, raw & 0xFF])
-    return bytes(length)
-```
-
-### Example B — SPI display (finding the transaction format)
-
-**Datasheet says** (ST7789 section 8.3):
-> Write cycle: CS low, D/CX low for command byte, D/CX high for data bytes, CS high.
-> RAMWR (0x2C): followed by pixel data, 2 bytes per pixel, RGB565.
-
-**model.py key logic:**
-```python
-def gpio_write(self, pin, value):
-    if pin == self._dc_pin:
-        self._is_data = bool(value)
-
-def spi_transfer(self, cs_pin, data):
-    for byte in data:
-        if not self._is_data:
-            self._current_cmd = byte   # command phase
-        else:
-            self._write_pixel_byte(byte)   # data phase
-    return bytes(len(data))
-```
-
-### Example C — MCU gpio_map (ESP32-WROOM-32, partial)
-
-**From ESP32 datasheet Table 9 + KiCad symbol pin names:**
-
-| GPIO | KiCad pin name | Capabilities |
-|---|---|---|
-| 0 | IO0 | digital_in, digital_out, pwm, adc |
-| 2 | IO2 | digital_in, digital_out, pwm, adc |
-| 18 | IO18 | digital_in, digital_out, pwm, spi |
-| 21 | IO21 | digital_in, digital_out, i2c |
-| 25 | IO25 | digital_in, digital_out, dac, pwm |
-| 34 | IO34 | digital_in, adc, **input_only** |
-
-```json
-"gpio_map":  { "18": "IO18", "21": "IO21", "34": "IO34" },
-"pin_caps":  {
-  "18": ["digital_in", "digital_out", "pwm", "spi"],
-  "21": ["digital_in", "digital_out", "i2c"],
-  "34": ["digital_in", "adc", "input_only"]
-}
-```
-
----
-
-*End of Part Authoring Guide.*
-*When in doubt, check the datasheet first, then check how an existing part implements the same pattern.*
+- [ ] `descriptor.json` has all REQUIRED fields
+- [ ] Every pin name in `"pins"` matches the KiCad symbol label character for character
+- [ ] I2C/SPI block present and matches the datasheet address/mode
+- [ ] Register reset values in descriptor match what `model.reset()` loads
+- [ ] `inject()` parameters are named `<quantity>_<unit>` (e.g. `temperature_c`)
+- [ ] LSB weight / sensitivity constant is cited with the datasheet table name in a comment
+- [ ] `spi_transfer()` / `i2c_read()` byte order matches the datasheet timing diagram
+- [ ] `PART_ID` matches the directory name exactly
+- [ ] `simulation_model` path in descriptor resolves to the actual class
+- [ ] `register_part()` call is at the bottom of `model.py` with the correct `lib_id`
+- [ ] For MCU parts: `gpio_map` covers all GPIO pins, `pin_caps` flags all input-only pins
