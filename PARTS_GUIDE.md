@@ -36,14 +36,21 @@ Pick exactly one. This determines which Node methods you must implement.
 | Sensor | `U` | Yes | Register map + injectable measurement values |
 | Display / Output IC | `U` | Yes | Framebuffer or output state, no rendering |
 | Interface IC | `U` | Yes | Protocol bridge or converter behaviour |
-| Power IC | `U` | Yes — simple | Drives a regulated rail voltage onto the bus |
-| Discrete | `D`, `LED`, `Q` | Yes — simple | Threshold/switch model (diode, transistor) |
+| Power IC | `U` | Yes — simple | Subclass `RegulatorNode` or `BatteryNode` |
+| Transistor | `Q` | Yes — simple | Threshold / switch model |
+| Diode / LED | `D`, `LED` | **No** | Auto-handled by `physics/passive.py` |
 | Passive | `R`, `C`, `L`, `FB` | **No** | Auto-handled by `physics/passive.py` |
 | Connector | `J` | **No** | Inert — nets pass straight through |
 | Crystal / Oscillator | `Y`, `X` | **No** | Assumed always-on clock source |
 
-Passives, connectors, and crystals need a `descriptor.json` only if you want
-thermal tracking — they never need a `model.py`.
+Passives, connectors, crystals, and diodes/LEDs need a `descriptor.json` only
+if you want thermal tracking — they never need a `model.py`.
+
+For diodes and LEDs the simulator detects the forward voltage (Vf) automatically
+from the KiCad value string: Schottky → 0.3 V, LED → 2.0 V, silicon → 0.7 V,
+Zener/TVS → skipped. If a diode needs non-standard Vf or additional behaviour
+(e.g. a specific clamp voltage), create a `model.py` and register it; the
+passive auto-handler is bypassed when a registered class exists for that lib_id.
 
 ---
 
@@ -398,6 +405,30 @@ The bus calls these when firmware issues `Wire.write()` / `Wire.requestFrom()`.
         pass
 ```
 
+**Sensors with an interrupt pin** — implement `attach()` to get bus access,
+then drive the INT net from `tick()`:
+
+```python
+    def attach(self, netlist, bus, runner) -> None:
+        self._bus = bus
+        # Read the net name that the INT pin is connected to in the schematic.
+        # Replace "INT" with the exact KiCad pin name from the symbol.
+        comp = netlist.components.get(self.id, {})
+        self._int_net = comp.get("pins", {}).get("INT", "")
+
+    def tick(self, dt_ms: float) -> None:
+        # ... update internal state, set self._data_ready ...
+        if self._int_net:
+            if self._data_ready:
+                self._bus.drive_digital(self._int_net, self.id, False)  # pull INT low
+            else:
+                self._bus.release(self._int_net, self.id)               # release INT
+```
+
+The MCU firmware calls `attachInterrupt(pin, callback, FALLING)` on the GPIO
+that connects to this net. The simulator fires the callback at the end of the
+tick in which INT transitions from HIGH to LOW.
+
 ### 4.3 SPI sensor/IC — add these methods
 
 The bus calls these when the MCU asserts the CS net and calls `SPI.transfer()`.
@@ -473,7 +504,53 @@ these methods:
         ...
 ```
 
-### 4.6 Rules enforced across all models
+### 4.6 Power IC — use the provided base classes
+
+Do not write a voltage source from scratch. Subclass the appropriate base from
+`physics/voltage_source.py` and override only what differs:
+
+```python
+from physics.voltage_source import RegulatorNode, BatteryNode
+
+class MyLDONode(RegulatorNode):
+    PART_ID = "<part-name>"
+
+    def __init__(self, instance_id: str, descriptor: dict):
+        # Read v_out and v_dropout from the descriptor if present,
+        # otherwise hard-code from the datasheet.
+        super().__init__(
+            instance_id,
+            input_net  = "<input-rail-net-name>",   # resolved at runtime
+            output_net = "<output-rail-net-name>",
+            v_out      = 3.3,    # nominal output voltage (V)
+            v_dropout  = 0.3,    # minimum headroom required (V)
+            i_limit_a  = 0.5,    # current limit (A)
+        )
+```
+
+```python
+class MyBatteryNode(BatteryNode):
+    PART_ID = "<part-name>"
+
+    def __init__(self, instance_id: str, descriptor: dict):
+        super().__init__(
+            instance_id,
+            output_net   = "<output-net-name>",
+            v_full       = 4.2,     # fully charged terminal voltage (V)
+            v_empty      = 3.0,     # cut-off voltage (V)
+            capacity_mah = 2000.0,  # rated capacity
+            internal_resistance = 0.1,  # Ω — from datasheet or measured
+        )
+```
+
+`RegulatorNode.tick()` automatically drops the output when the input sags below
+`v_out + v_dropout`. `BatteryNode.tick()` tracks state-of-charge and drapes
+the terminal voltage linearly between `v_full` and `v_empty`.
+
+Add with `runner.add_node(node)` — do not register in the part registry unless
+the part appears in KiCad schematics as a component with a lib_id.
+
+### 4.7 Rules enforced across all models
 
 | Rule | Reason |
 |---|---|
@@ -733,3 +810,6 @@ runner.load("board.kicad_sch")
 - [ ] `simulation_model` path in descriptor resolves to the actual class
 - [ ] `register_part()` call is at the bottom of `model.py` with the correct `lib_id`
 - [ ] For MCU parts: `gpio_map` covers all GPIO pins, `pin_caps` flags all input-only pins
+- [ ] For sensors with an INT pin: `attach()` resolves `_int_net`; `tick()` drives it LOW when data is ready and releases it otherwise
+- [ ] For power IC parts: subclasses `RegulatorNode` or `BatteryNode`; constructor parameters match the datasheet
+- [ ] D/LED parts with non-standard Vf or extra behaviour have a registered `model.py`; otherwise no model is needed

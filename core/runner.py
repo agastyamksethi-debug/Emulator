@@ -66,7 +66,8 @@ class SimRunner:
                 continue
             node = node_class(instance_id=ref, descriptor=comp)
             self.bus.register(node)
-            # MCU (and any node that needs bus/netlist context) calls attach()
+            if hasattr(node, "attach_bus"):
+                node.attach_bus(self.bus)
             if hasattr(node, "attach"):
                 node.attach(self._netlist, self.bus, self)
             node.reset()
