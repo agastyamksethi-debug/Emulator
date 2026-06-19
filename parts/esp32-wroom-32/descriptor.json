@@ -1,0 +1,317 @@
+{
+  "part": "ESP32-WROOM-32",
+  "manufacturer": "Espressif Systems",
+  "description": "Dual-core 32-bit MCU with WiFi+Bluetooth, ADC, DAC, SPI/I2C/UART",
+  "classification": "MCU",
+  "protocol": "GPIO",
+  "datasheet": "esp32_datasheet_en.pdf",
+
+  "package": "BGA-48",
+  "visual": {
+    "width_mm": 18,
+    "height_mm": 20,
+    "color": "#1a1a1a"
+  },
+
+  "vdd_min": 2.3,
+  "vdd_max": 3.6,
+  "vdd_nom": 3.3,
+  "idd_ua": 80000,
+
+  "pins": {
+    "GND_1": {"type": "ground", "note": "Ground (Pad 1)"},
+    "GND_2": {"type": "ground", "note": "Ground (Pad 2)"},
+    "GND_3": {"type": "ground", "note": "Ground (Pad 3)"},
+    "GND_4": {"type": "ground", "note": "Ground (Pad 4)"},
+    "GND_5": {"type": "ground", "note": "Ground"},
+    "GND_6": {"type": "ground", "note": "Ground"},
+    "GND_7": {"type": "ground", "note": "Ground"},
+    "GND_8": {"type": "ground", "note": "Ground"},
+    "VDD": {"type": "power", "voltage": 3.3, "note": "Power supply input 3.3V"},
+    "VDDA": {"type": "power", "voltage": 3.3, "note": "Analog power supply for ADC"},
+    "VDDA_18": {"type": "power", "voltage": 3.3, "note": "Analog power for GPIO18/GPIO19"},
+
+    "IO0": {"type": "gpio", "note": "GPIO0 - strapping pin (pull-low for boot from UART)"},
+    "IO2": {"type": "gpio", "note": "GPIO2 - strapping pin (pull-down for normal boot)"},
+    "IO4": {"type": "gpio", "note": "GPIO4 - DAC ch 0 output"},
+    "IO5": {"type": "gpio", "note": "GPIO5 - SPI0 CS0 at boot"},
+    "IO12": {"type": "gpio", "note": "GPIO12 - strapping pin (internal pull-up selects voltage for external flash)"},
+    "IO13": {"type": "gpio", "note": "GPIO13"},
+    "IO14": {"type": "gpio", "note": "GPIO14"},
+    "IO15": {"type": "gpio", "note": "GPIO15 - strapping pin (pull to GND for normal boot)"},
+    "IO16": {"type": "gpio", "note": "GPIO16"},
+    "IO17": {"type": "gpio", "note": "GPIO17"},
+    "IO18": {"type": "gpio", "note": "GPIO18"},
+    "IO19": {"type": "gpio", "note": "GPIO19"},
+    "IO21": {"type": "gpio", "note": "GPIO21"},
+    "IO22": {"type": "gpio", "note": "GPIO22"},
+    "IO23": {"type": "gpio", "note": "GPIO23"},
+    "IO25": {"type": "gpio", "note": "GPIO25 - DAC ch 1 output"},
+    "IO26": {"type": "gpio", "note": "GPIO26"},
+    "IO27": {"type": "gpio", "note": "GPIO27"},
+    "IO32": {"type": "adc_in", "note": "GPIO32 - ADC ch 4 (input-only)"},
+    "IO33": {"type": "adc_in", "note": "GPIO33 - ADC ch 5 (input-only)"},
+    "IO34": {"type": "adc_in", "note": "GPIO34 - ADC ch 6 (input-only, no output)"},
+    "IO35": {"type": "adc_in", "note": "GPIO35 - ADC ch 7 (input-only, no output)"},
+    "IO36": {"type": "adc_in", "note": "GPIO36 - ADC ch 0 (input-only, no output), VP"},
+    "IO39": {"type": "adc_in", "note": "GPIO39 - ADC ch 3 (input-only, no output), VN"},
+
+    "CLK_OUT1": {"type": "gpio_out", "note": "CLK_OUT1 - GPIO0 alternative output"},
+    "CLK_OUT2": {"type": "gpio_out", "note": "CLK_OUT2 - GPIO4 alternative output"},
+    "CLK_OUT3": {"type": "gpio_out", "note": "CLK_OUT3 - GPIO5 alternative output"},
+
+    "CHIP_EN": {"type": "enable", "active": "high", "note": "Chip enable, active high"},
+    "XTAL_P": {"type": "nc", "note": "Crystal positive terminal (32 MHz)"},
+    "XTAL_N": {"type": "nc", "note": "Crystal negative terminal"},
+
+    "MTDI": {"type": "gpio", "note": "GPIO12 JTAG TDI"},
+    "MTCK": {"type": "gpio", "note": "GPIO13 JTAG TCK"},
+    "MTMS": {"type": "gpio", "note": "GPIO14 JTAG TMS"},
+    "MTDO": {"type": "gpio", "note": "GPIO15 JTAG TDO"},
+
+    "SENSOR_VP": {"type": "adc_in", "note": "Analog input (ADC_CH0) - GPIO36"},
+    "SENSOR_VN": {"type": "adc_in", "note": "Analog input (ADC_CH3) - GPIO39"},
+    "SENSOR_CAPP": {"type": "nc", "note": "Touch sensor capacitor pad"},
+    "SENSOR_CAPN": {"type": "nc", "note": "Touch sensor capacitor pad"},
+
+    "NC_1": {"type": "nc", "note": "No connect"},
+    "NC_2": {"type": "nc", "note": "No connect"},
+    "NC_3": {"type": "nc", "note": "No connect"},
+    "NC_4": {"type": "nc", "note": "No connect"}
+  },
+
+  "gpio_map": {
+    "0": "IO0",
+    "2": "IO2",
+    "4": "IO4",
+    "5": "IO5",
+    "12": "IO12",
+    "13": "IO13",
+    "14": "IO14",
+    "15": "IO15",
+    "16": "IO16",
+    "17": "IO17",
+    "18": "IO18",
+    "19": "IO19",
+    "21": "IO21",
+    "22": "IO22",
+    "23": "IO23",
+    "25": "IO25",
+    "26": "IO26",
+    "27": "IO27",
+    "32": "IO32",
+    "33": "IO33",
+    "34": "IO34",
+    "35": "IO35",
+    "36": "IO36",
+    "39": "IO39"
+  },
+
+  "pin_caps": {
+    "0":  ["digital_in", "digital_out", "adc2", "pwm", "spi1", "i2c0", "uart0"],
+    "2":  ["digital_in", "digital_out", "adc2", "pwm", "spi1", "i2c0"],
+    "4":  ["digital_in", "digital_out", "adc2", "pwm", "i2c0"],
+    "5":  ["digital_in", "digital_out", "pwm", "spi2", "uart0"],
+    "12": ["digital_in", "digital_out", "adc2", "pwm", "spi1"],
+    "13": ["digital_in", "digital_out", "adc2", "pwm", "spi1", "uart1"],
+    "14": ["digital_in", "digital_out", "adc2", "pwm", "spi1"],
+    "15": ["digital_in", "digital_out", "adc2", "pwm", "spi1", "uart1"],
+    "16": ["digital_in", "digital_out", "pwm", "uart2"],
+    "17": ["digital_in", "digital_out", "pwm", "uart2"],
+    "18": ["digital_in", "digital_out", "pwm", "spi2"],
+    "19": ["digital_in", "digital_out", "pwm", "spi2"],
+    "21": ["digital_in", "digital_out", "pwm", "i2c0"],
+    "22": ["digital_in", "digital_out", "pwm", "i2c0"],
+    "23": ["digital_in", "digital_out", "pwm", "spi2"],
+    "25": ["digital_in", "digital_out", "dac", "pwm", "adc2"],
+    "26": ["digital_in", "digital_out", "dac", "pwm", "adc2"],
+    "27": ["digital_in", "digital_out", "adc2", "pwm"],
+    "32": ["digital_in", "digital_out", "adc1", "pwm"],
+    "33": ["digital_in", "digital_out", "adc1", "pwm"],
+    "34": ["digital_in", "adc1", "input_only"],
+    "35": ["digital_in", "adc1", "input_only"],
+    "36": ["digital_in", "adc1", "input_only"],
+    "39": ["digital_in", "adc1", "input_only"]
+  },
+
+  "adc_specs": {
+    "adc1": {
+      "resolution_bits": 12,
+      "channels": 8,
+      "channel_map": {
+        "0": "GPIO36",
+        "1": "GPIO37",
+        "2": "GPIO38",
+        "3": "GPIO39",
+        "4": "GPIO32",
+        "5": "GPIO33",
+        "6": "GPIO34",
+        "7": "GPIO35"
+      },
+      "vref": 1.1,
+      "min_voltage": 0,
+      "max_voltage": 3.6,
+      "attenuation_0db_range": [0.0, 1.1],
+      "attenuation_2_5db_range": [0.0, 1.5],
+      "attenuation_6db_range": [0.0, 2.2],
+      "attenuation_11db_range": [0.0, 3.6],
+      "sampling_frequency_khz": 200,
+      "lsb_mv": 0.805
+    },
+    "adc2": {
+      "resolution_bits": 12,
+      "channels": 10,
+      "channel_map": {
+        "0": "GPIO4",
+        "1": "GPIO0",
+        "2": "GPIO2",
+        "3": "GPIO15",
+        "4": "GPIO13",
+        "5": "GPIO12",
+        "6": "GPIO14",
+        "7": "GPIO27",
+        "8": "GPIO25",
+        "9": "GPIO26"
+      },
+      "vref": 1.1,
+      "min_voltage": 0,
+      "max_voltage": 3.6,
+      "attenuation_0db_range": [0.0, 1.1],
+      "attenuation_2_5db_range": [0.0, 1.5],
+      "attenuation_6db_range": [0.0, 2.2],
+      "attenuation_11db_range": [0.0, 3.6],
+      "sampling_frequency_khz": 200,
+      "lsb_mv": 0.805
+    }
+  },
+
+  "dac_specs": {
+    "dac1": {
+      "pin": "GPIO25",
+      "resolution_bits": 8,
+      "min_voltage": 0.0,
+      "max_voltage": 3.3,
+      "lsb_mv": 12.9,
+      "settling_time_us": 10,
+      "capacitive_load_pf": 100
+    },
+    "dac2": {
+      "pin": "GPIO26",
+      "resolution_bits": 8,
+      "min_voltage": 0.0,
+      "max_voltage": 3.3,
+      "lsb_mv": 12.9,
+      "settling_time_us": 10,
+      "capacitive_load_pf": 100
+    }
+  },
+
+  "uart_specs": {
+    "uart0": {
+      "tx_pin": "GPIO1",
+      "rx_pin": "GPIO3",
+      "default_baud": 115200,
+      "max_baud": 5000000,
+      "fifo_size": 128
+    },
+    "uart1": {
+      "tx_pin": "GPIO10",
+      "rx_pin": "GPIO9",
+      "default_baud": 115200,
+      "max_baud": 5000000,
+      "fifo_size": 128
+    },
+    "uart2": {
+      "tx_pin": "GPIO17",
+      "rx_pin": "GPIO16",
+      "default_baud": 115200,
+      "max_baud": 5000000,
+      "fifo_size": 128
+    }
+  },
+
+  "spi_specs": {
+    "spi1": {
+      "clk_pin": "GPIO14",
+      "mosi_pin": "GPIO13",
+      "miso_pin": "GPIO12",
+      "cs_pins": ["GPIO15"],
+      "mode": 0,
+      "max_speed_hz": 80000000,
+      "max_dma_size": 4092
+    },
+    "spi2": {
+      "clk_pin": "GPIO18",
+      "mosi_pin": "GPIO23",
+      "miso_pin": "GPIO19",
+      "cs_pins": ["GPIO5"],
+      "mode": 0,
+      "max_speed_hz": 80000000,
+      "max_dma_size": 4092
+    },
+    "spi3": {
+      "clk_pin": "GPIO6",
+      "mosi_pin": "GPIO7",
+      "miso_pin": "GPIO8",
+      "cs_pins": ["GPIO11"],
+      "mode": 0,
+      "max_speed_hz": 80000000,
+      "max_dma_size": 4092,
+      "note": "Internal to module (SPI0)"
+    }
+  },
+
+  "i2c_specs": {
+    "i2c0": {
+      "sda_pin": "GPIO21",
+      "scl_pin": "GPIO22",
+      "default_speed_khz": 100,
+      "max_speed_khz": 400,
+      "high_speed_khz": 1000
+    },
+    "i2c1": {
+      "sda_pin": "GPIO18",
+      "scl_pin": "GPIO19",
+      "default_speed_khz": 100,
+      "max_speed_khz": 400,
+      "high_speed_khz": 1000
+    }
+  },
+
+  "pwm_specs": {
+    "ledc_timers": 4,
+    "ledc_channels": 16,
+    "resolution_bits": 20,
+    "frequency_hz_min": 10,
+    "frequency_hz_max": 80000000,
+    "duty_resolution": 20
+  },
+
+  "touch_specs": {
+    "channels": 10,
+    "resolution_bits": 4,
+    "gpio_map": ["GPIO4", "GPIO0", "GPIO2", "GPIO15", "GPIO13", "GPIO12", "GPIO14", "GPIO27", "GPIO32", "GPIO33"]
+  },
+
+  "timer_specs": {
+    "general_timers": 4,
+    "watchdog_timers": 2,
+    "timer_width_bits": 64,
+    "max_count": 18446744073709551615
+  },
+
+  "memory_specs": {
+    "sram_internal_kb": 520,
+    "dram_external_mb": 0,
+    "flash_external_mb": 4,
+    "rtc_memory_kb": 8,
+    "instruction_cache_kb": 16,
+    "data_cache_kb": 16
+  },
+
+  "thermal_resistance_c_per_w": 25,
+  "thermal_capacitance_j_per_c": 0.8,
+
+  "simulation_model": "parts.esp32_wroom_32.model.ESP32WROOM32Node",
+  "arduino_library": "parts/esp32-wroom-32/arduino"
+}
