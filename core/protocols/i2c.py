@@ -5,6 +5,8 @@ Handles address arbitration and ACK/NAK semantics. Multiple nodes can
 share the same I2C bus; each is addressed by its 7-bit address.
 """
 
+from __future__ import annotations
+
 
 class I2CBus:
     def __init__(self, bus_id: int = 0, speed_hz: int = 400_000):

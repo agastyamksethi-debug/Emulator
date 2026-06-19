@@ -5,6 +5,8 @@ Devices are differentiated by chip-select (CS) pin number, which is
 resolved from the netlist. Only one CS may be asserted at a time.
 """
 
+from __future__ import annotations
+
 
 class SPIBus:
     def __init__(self, bus_id: int = 0, max_speed_hz: int = 40_000_000):

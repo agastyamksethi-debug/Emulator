@@ -6,6 +6,8 @@ The bus calls tick() every simulation step and routes protocol traffic
 to the matching method based on the netlist topology.
 """
 
+from __future__ import annotations
+
 
 class Node:
     def __init__(self, instance_id: str, descriptor: dict):

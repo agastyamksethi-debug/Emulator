@@ -32,11 +32,16 @@ if TYPE_CHECKING:
 
 # ---------------------------------------------------------------- constants --
 
-INPUT       = 0x00
-OUTPUT      = 0x01
-INPUT_PULLUP= 0x02
-HIGH        = 1
-LOW         = 0
+INPUT        = 0x00
+OUTPUT       = 0x01
+INPUT_PULLUP = 0x02
+HIGH         = 1
+LOW          = 0
+
+# Interrupt trigger modes for attachInterrupt()
+RISING  = "RISING"
+FALLING = "FALLING"
+CHANGE  = "CHANGE"
 
 
 class SimPinError(Exception):
@@ -337,6 +342,28 @@ class ArduinoShim:
 
     def ledcSetup(self, channel: int, freq: float, resolution: int):
         pass
+
+    # ------------------------------------------------------- interrupts ------
+
+    def attachInterrupt(self, pin: int, callback, mode=FALLING):
+        """
+        Register an ISR for a GPIO pin.
+        mode can be RISING, FALLING, CHANGE, LOW, or HIGH (string constants).
+        The callback is called synchronously at the end of the tick in which
+        the edge occurs.
+        """
+        from firmware.shim.pin_map import Cap
+        if not self._pin_map.has_cap(pin, Cap.DIGITAL_IN):
+            raise SimPinError(f"GPIO{pin} cannot be used as interrupt input")
+        net = self._pin_map.net(pin)
+        if net is None:
+            return
+        self._bus.interrupt.attach(net, callback, mode)
+
+    def detachInterrupt(self, pin: int):
+        net = self._pin_map.net(pin)
+        if net:
+            self._bus.interrupt.detach(net)
 
     # --------------------------------------------------------- timing --------
 

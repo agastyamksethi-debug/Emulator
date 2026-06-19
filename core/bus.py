@@ -19,16 +19,18 @@ from core.protocols.gpio import GPIOBus
 from core.protocols.i2c import I2CBus
 from core.protocols.spi import SPIBus
 from core.protocols.uart import UARTBus
+from core.protocols.interrupt import InterruptBus
 import core.registry as registry
 
 
 class SimBus:
     def __init__(self, v_supply: float = 3.3):
         self.v_supply = v_supply
-        self.gpio = GPIOBus(v_supply=v_supply)
-        self.spi  = SPIBus()
-        self.i2c  = I2CBus()
-        self.uart = UARTBus()
+        self.gpio      = GPIOBus(v_supply=v_supply)
+        self.spi       = SPIBus()
+        self.i2c       = I2CBus()
+        self.uart      = UARTBus()
+        self.interrupt = InterruptBus()
 
         self._nodes: dict[str, Node] = {}
         self._netlist: NetList | None = None

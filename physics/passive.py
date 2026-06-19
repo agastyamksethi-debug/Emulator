@@ -1,9 +1,9 @@
 """
-Passive component physics — resistors, capacitors, inductors.
+Passive component physics — resistors, capacitors, inductors, diodes.
 
-PassiveModel.load(netlist) auto-instantiates every R, C, L in the netlist.
-PassiveModel.tick(dt_ms, net_voltages, gpio_bus) runs physics and writes
-results back to the GPIO bus.
+PassiveModel.load(netlist) auto-instantiates every R, C, L, D in the netlist.
+PassiveModel.tick(dt_ms, gpio_bus) runs physics and writes results back to
+the GPIO bus.
 
 Value string parsing ("10k", "100nF", "10uH" etc.) handles the common
 engineering notation used in KiCad value fields.
@@ -185,6 +185,82 @@ class Inductor:
                 f"I={self.current*1e3:.3f}mA  E={self.energy*1e9:.3f}nJ>")
 
 
+# ------------------------------------------------------------------ Diode ----
+
+# Forward voltage lookup for common part families identified from value/lib_id.
+# Key = lowercase substring to match; value = Vf in volts.
+_VF_PATTERNS: list[tuple[str, float]] = [
+    ("schottky", 0.3),
+    ("bat54",    0.3),
+    ("bat46",    0.3),
+    ("sb",       0.3),
+    ("1n5817",   0.3),
+    ("1n5818",   0.3),
+    ("1n5819",   0.3),
+    ("led",      2.0),
+]
+_VF_DEFAULT_SILICON  = 0.7
+_VF_SKIP_KEYWORDS    = ("zener", "tvs", "bz", "1n47", "1n48", "1n49", "1n50",
+                         "1n51", "1n52", "bzt", "bzx")
+
+
+def _diode_vf(value_str: str, lib_id: str) -> float | None:
+    """
+    Determine forward voltage (Vf) from the KiCad value string and lib_id.
+    Returns None for parts that need a non-diode model (Zener, TVS).
+    """
+    combined = (value_str + " " + lib_id).lower()
+    for kw in _VF_SKIP_KEYWORDS:
+        if kw in combined:
+            return None
+    for kw, vf in _VF_PATTERNS:
+        if kw in combined:
+            return vf
+    return _VF_DEFAULT_SILICON
+
+
+class Diode:
+    """
+    Ideal diode with forward voltage drop.
+
+    Conducts when V_anode − V_cathode > Vf:
+      → drives cathode net to V_anode − Vf
+    Blocks otherwise:
+      → releases cathode net (other elements determine its voltage)
+    """
+
+    def __init__(self, instance_id: str, vf: float,
+                 net_anode: str = "", net_cathode: str = ""):
+        if vf < 0:
+            raise ValueError(f"{instance_id}: Vf must be >= 0 V")
+        self.id          = instance_id
+        self.Vf          = vf
+        self.net_anode   = net_anode
+        self.net_cathode = net_cathode
+
+        self.conducting:       bool  = False
+        self.current:          float = 0.0   # A (estimated)
+        self.power:            float = 0.0   # W (I × Vf)
+        self._cathode_voltage: float = 0.0   # driven value when conducting
+
+    def tick(self, v_anode: float, v_cathode: float) -> None:
+        if v_anode - v_cathode > self.Vf:
+            self.conducting       = True
+            self._cathode_voltage = v_anode - self.Vf
+            # Estimate current assuming ~10 Ω source impedance (conservative)
+            self.current          = (v_anode - v_cathode - self.Vf) / 10.0
+            self.power            = self.current * self.Vf
+        else:
+            self.conducting       = False
+            self._cathode_voltage = 0.0
+            self.current          = 0.0
+            self.power            = 0.0
+
+    def __repr__(self):
+        state = f"Vf={self.Vf}V CONDUCTING" if self.conducting else "BLOCKING"
+        return f"<D {self.id}  {state}  I={self.current*1e3:.2f}mA>"
+
+
 # ---------------------------------------------------------- PassiveModel ------
 
 # Default series resistance used for capacitor tick when the driving net
@@ -244,7 +320,7 @@ class PassiveModel:
         self.resistors:  list[Resistor]  = []
         self.capacitors: list[Capacitor] = []
         self.inductors:  list[Inductor]  = []
-        # DRC results from load() — decoupling caps that were found and skipped
+        self.diodes:     list[Diode]     = []
         self.decouple_caps: list[dict] = []
         self.validation_errors: list[str] = []
 
@@ -258,6 +334,7 @@ class PassiveModel:
         self.resistors.clear()
         self.capacitors.clear()
         self.inductors.clear()
+        self.diodes.clear()
         self.decouple_caps.clear()
         self.validation_errors.clear()
 
@@ -298,6 +375,19 @@ class PassiveModel:
                     continue
                 self.inductors.append(Inductor(ref, henries, net_a=p1, net_b=p2))
 
+            elif prefix in ("D", "LED"):
+                # KiCad diode pins are named A (anode) and K (cathode).
+                # Some symbols use + / - or AN / CA as alternatives.
+                net_a = pins.get("A", pins.get("+", pins.get("AN", "")))
+                net_k = pins.get("K", pins.get("-", pins.get("CA", pins.get("C", ""))))
+                if not net_a or not net_k:
+                    continue
+                lib_id = comp.get("part", "")
+                vf = _diode_vf(val_str, lib_id)
+                if vf is None:
+                    continue   # Zener / TVS — skip
+                self.diodes.append(Diode(ref, vf, net_anode=net_a, net_cathode=net_k))
+
     def add_resistor(self, r: Resistor):
         self.resistors.append(r)
 
@@ -306,6 +396,9 @@ class PassiveModel:
 
     def add_inductor(self, l: Inductor):
         self.inductors.append(l)
+
+    def add_diode(self, d: Diode):
+        self.diodes.append(d)
 
     # --------------------------------------------------------------- tick ----
 
@@ -342,3 +435,12 @@ class PassiveModel:
             v_a = vmap.get(l.net_a, 0.0)
             v_b = vmap.get(l.net_b, 0.0)
             l.tick(v_a, v_b, dt_s)
+
+        for d in self.diodes:
+            v_a = vmap.get(d.net_anode,   0.0)
+            v_k = vmap.get(d.net_cathode, 0.0)
+            d.tick(v_a, v_k)
+            if d.conducting and d.net_cathode:
+                gpio_bus.drive(d.net_cathode, f"_diode_{d.id}", d._cathode_voltage)
+            elif d.net_cathode:
+                gpio_bus.release(d.net_cathode, f"_diode_{d.id}")

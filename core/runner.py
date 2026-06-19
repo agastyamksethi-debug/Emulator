@@ -19,6 +19,7 @@ from typing import Callable
 from core.bus import SimBus
 from core.netlist import NetList, parse as parse_netlist
 from core.node import Node
+from core.recorder import WaveformRecorder
 from physics.engine import PhysicsEngine
 import core.registry as registry
 
@@ -26,10 +27,11 @@ import core.registry as registry
 class SimRunner:
     def __init__(self, v_supply: float = 3.3, ambient_c: float = 25.0,
                  dt_ms: float = 1.0):
-        self.bus = SimBus(v_supply=v_supply)
-        self.physics = PhysicsEngine(ambient_c=ambient_c)
-        self.dt_ms = dt_ms              # default timestep
-        self.elapsed_ms: float = 0.0   # total simulated time
+        self.bus      = SimBus(v_supply=v_supply)
+        self.physics  = PhysicsEngine(ambient_c=ambient_c)
+        self.recorder = WaveformRecorder()
+        self.dt_ms    = dt_ms
+        self.elapsed_ms: float = 0.0
         self._netlist: NetList | None = None
         self._on_tick: list[Callable[[float], None]] = []
 
@@ -52,7 +54,8 @@ class SimRunner:
     def _auto_instantiate(self):
         """
         For every IC component in the netlist, instantiate its Node subclass
-        (if registered) and add it to the bus.
+        (if registered), register it on the bus, then call attach() and reset()
+        so MCU nodes can build their PinMap and shim before the first tick.
         """
         if not self._netlist:
             return
@@ -60,15 +63,28 @@ class SimRunner:
             lib_id = comp.get("part", "")
             node_class = registry.resolve(ref, lib_id)
             if node_class is None:
-                continue    # passive or unregistered part
+                continue
             node = node_class(instance_id=ref, descriptor=comp)
             self.bus.register(node)
+            # MCU (and any node that needs bus/netlist context) calls attach()
+            if hasattr(node, "attach"):
+                node.attach(self._netlist, self.bus, self)
+            node.reset()
 
     # -------------------------------------------------------------- manual ---
 
     def add_node(self, node: Node):
-        """Manually add a node (e.g. for a part not yet in the registry)."""
+        """
+        Manually add a node (voltage sources, unregistered parts, test stubs).
+        Calls attach_bus() for VoltageSourceNode subclasses and attach() for
+        MCU-style nodes that need netlist + runner context.
+        """
         self.bus.register(node)
+        if hasattr(node, "attach_bus"):
+            node.attach_bus(self.bus)
+        if hasattr(node, "attach") and self._netlist:
+            node.attach(self._netlist, self.bus, self)
+        node.reset()
         nodes = list(self.bus._nodes.values())
         if self._netlist:
             self.physics.load(nodes, self._netlist)
@@ -76,11 +92,26 @@ class SimRunner:
     # ----------------------------------------------------------------- tick ---
 
     def tick(self, dt_ms: float | None = None):
-        """Advance the simulation by one timestep."""
+        """
+        Advance the simulation by one timestep.
+
+        Sequence per tick:
+          1. Snapshot interrupt net states (before anything changes)
+          2. All nodes tick (firmware runs, sensors update output regs)
+          3. Physics tick (R/C/L transients + thermal)
+          4. Advance elapsed time
+          5. Fire any pending interrupt callbacks
+          6. Record waveform samples
+          7. Invoke on_tick callbacks
+        """
         dt = dt_ms if dt_ms is not None else self.dt_ms
+        self.bus.interrupt.snapshot(self.bus.gpio)
         self.bus.tick_all(dt)
         self.physics.tick(dt, self.bus.gpio)
         self.elapsed_ms += dt
+        self.bus.interrupt.tick(self.bus.gpio)
+        if self.recorder:
+            self.recorder.record(self.elapsed_ms, self.bus.gpio)
         for cb in self._on_tick:
             cb(self.elapsed_ms)
 
@@ -97,7 +128,17 @@ class SimRunner:
         """Register a callback invoked after every tick with elapsed_ms."""
         self._on_tick.append(callback)
 
-    # --------------------------------------------------------------- state ---
+    # --------------------------------------------------------------- probing ---
+
+    def probe(self, net_name: str, label: str | None = None):
+        """Start recording a net voltage every tick. Returns the channel."""
+        return self.recorder.probe(net_name, label)
+
+    def waveform(self, net_name: str) -> list[tuple[float, float]]:
+        """Return recorded [(time_ms, voltage)] pairs for a net."""
+        return self.recorder.waveform(net_name)
+
+    # --------------------------------------------------------------- state ----
 
     def net_voltage(self, net_name: str) -> float:
         return self.bus.read_voltage(net_name)
@@ -113,8 +154,9 @@ class SimRunner:
         return self.bus._nodes.get(reference)
 
     def reset(self):
-        """Reset all nodes and clear elapsed time."""
+        """Reset all nodes, clear elapsed time, and clear waveform data."""
         self.elapsed_ms = 0.0
+        self.recorder.clear()
         for node in self.bus._nodes.values():
             node.reset()
 

@@ -12,6 +12,7 @@ Supports: wires, net labels, global labels, power symbols, junctions.
 Does not support: buses, hierarchical sheets (treated as unconnected).
 """
 
+from __future__ import annotations
 import math
 import re
 from dataclasses import dataclass, field
