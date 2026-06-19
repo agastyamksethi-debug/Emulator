@@ -607,3 +607,11 @@ class ESP32WROOM32Node(Node):
             self._bus.gpio.drive(net, f"{self.id}._inject", mv / 1000.0)
         except Exception:
             pass
+
+
+# Register with multiple KiCad lib_id variants so the runner's auto-instantiate
+# can find this class regardless of which symbol library the schematic uses.
+from core.registry import register_part  # noqa: E402
+register_part("ESP32-WROOM-32:ESP32-WROOM-32", ESP32WROOM32Node)
+register_part("Espressif:ESP32-WROOM-32",       ESP32WROOM32Node)
+register_part("esp32-wroom-32",                  ESP32WROOM32Node)

@@ -1,0 +1,17 @@
+{
+  "part": "LED",
+  "classification": "LED",
+  "description": "Generic LED — forward voltage drop with on/off state output",
+  "protocol": "GPIO",
+
+  "pins": {
+    "A": {"type": "anode",   "note": "Anode (+)"},
+    "K": {"type": "cathode", "note": "Cathode (−)"}
+  },
+
+  "vf": 2.0,
+  "if_ma": 20,
+  "color": "red",
+
+  "simulation_model": "parts.led.model.LEDNode"
+}

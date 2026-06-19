@@ -13,6 +13,8 @@ The runner owns the bus and physics engine and sequences them correctly:
 """
 
 from __future__ import annotations
+import json
+import os
 from pathlib import Path
 from typing import Callable
 
@@ -22,6 +24,20 @@ from core.node import Node
 from core.recorder import WaveformRecorder
 from physics.engine import PhysicsEngine
 import core.registry as registry
+
+_PARTS_DIR = os.path.join(os.path.dirname(__file__), "..", "parts")
+
+
+def _load_part_descriptor(node_class: type) -> dict:
+    """Read the static descriptor.json for a part via its PART_ID class attribute."""
+    part_id = getattr(node_class, "PART_ID", None)
+    if not part_id:
+        return {}
+    path = os.path.join(_PARTS_DIR, part_id, "descriptor.json")
+    if not os.path.exists(path):
+        return {}
+    with open(path) as f:
+        return json.load(f)
 
 
 class SimRunner:
@@ -64,7 +80,18 @@ class SimRunner:
             node_class = registry.resolve(ref, lib_id)
             if node_class is None:
                 continue
-            node = node_class(instance_id=ref, descriptor=comp)
+
+            # Merge static part descriptor with schematic-derived data.
+            # Schematic pin→net assignments always take precedence over the
+            # static descriptor's pin definitions.
+            static = _load_part_descriptor(node_class)
+            if static:
+                descriptor = {**static, **{k: v for k, v in comp.items() if k != "pins"}}
+                descriptor["pins"] = {**static.get("pins", {}), **comp.get("pins", {})}
+            else:
+                descriptor = comp
+
+            node = node_class(instance_id=ref, descriptor=descriptor)
             self.bus.register(node)
             if hasattr(node, "attach_bus"):
                 node.attach_bus(self.bus)
