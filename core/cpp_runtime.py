@@ -79,18 +79,24 @@ class CppFirmware:
     """
 
     def __init__(self, binary: str, pin_map: dict[int, str],
-                 v_supply: float = 3.3):
+                 v_supply: float = 3.3,
+                 serial_cb=None):
         """
-        binary   — path to compiled sketch binary
-        pin_map  — {arduino_pin_number: bus_net_name}
-                   e.g. {2: "GPIO_2", 13: "LED_NET"}
+        binary    — path to compiled sketch binary
+        pin_map   — {arduino_pin_number: bus_net_name}
+        serial_cb — callable(text: str) invoked for every Serial.print/println;
+                    if None, output goes to stdout
         """
         self.binary    = binary
         self.pin_map   = pin_map
         self.v_supply  = v_supply
+        self._serial_cb = serial_cb
         self._proc: subprocess.Popen | None = None
         self._bus:    SimBus    | None = None
         self._runner: SimRunner | None = None
+        # LEDC channel state (populated at runtime by LEDC_SETUP / LEDC_ATTACH)
+        self._ledc_resolution: dict[int, int] = {}  # channel → resolution bits
+        self._ledc_pin:        dict[int, int] = {}  # channel → pin number
 
     def attach(self, bus, runner):
         self._bus    = bus
@@ -116,7 +122,18 @@ class CppFirmware:
         op, _, rest = line.partition(" ")
 
         if op == "PM":
-            # pinMode — we don't need to track modes, just acknowledge
+            pin_s, _, mode_s = rest.partition(" ")
+            pin  = int(pin_s)
+            mode = int(mode_s) if mode_s.strip() else 1   # default OUTPUT
+            net  = self.pin_map.get(pin)
+            if net and self._bus:
+                ns = self._bus.gpio.net(net)
+                if mode == 2:    # INPUT_PULLUP
+                    ns._pull = self.v_supply
+                elif mode == 3:  # INPUT_PULLDOWN
+                    ns._pull = 0.0
+                else:            # INPUT (0) or OUTPUT (1)
+                    ns._pull = None
             self._send("OK")
 
         elif op == "DW":
@@ -152,16 +169,58 @@ class CppFirmware:
                 self._bus.gpio.drive(net, "cpp_fw", (val / 255.0) * self.v_supply)
             self._send("OK")
 
+        elif op == "LEDC_SETUP":
+            parts = rest.split()
+            channel    = int(parts[0])
+            # parts[1] is freq — not relevant for voltage-domain simulation
+            resolution = int(parts[2])
+            self._ledc_resolution[channel] = resolution
+            self._send("OK")
+
+        elif op == "LEDC_ATTACH":
+            pin_s, _, ch_s = rest.partition(" ")
+            self._ledc_pin[int(ch_s)] = int(pin_s)
+            self._send("OK")
+
+        elif op == "LEDC_WRITE":
+            ch_s, _, duty_s = rest.partition(" ")
+            channel, duty = int(ch_s), int(duty_s)
+            pin = self._ledc_pin.get(channel)
+            net = self.pin_map.get(pin) if pin is not None else None
+            if net and self._bus:
+                resolution = self._ledc_resolution.get(channel, 8)
+                max_duty   = (1 << resolution) - 1
+                voltage    = (duty / max_duty) * self.v_supply
+                self._bus.gpio.drive(net, "cpp_fw", voltage)
+            self._send("OK")
+
+        elif op == "LEDC_DETACH":
+            pin = int(rest)
+            for ch, p in list(self._ledc_pin.items()):
+                if p == pin:
+                    del self._ledc_pin[ch]
+            net = self.pin_map.get(pin)
+            if net and self._bus:
+                self._bus.gpio.release(net, "cpp_fw")
+            self._send("OK")
+
         elif op == "MILLIS":
             t = int(self._runner.elapsed_ms) if self._runner else 0
             self._send(str(t))
 
         elif op == "SER":
-            print(rest, end="", flush=True)
+            if self._serial_cb:
+                self._serial_cb(rest)
+            else:
+                print(rest, end="", flush=True)
             self._send("OK")
 
         elif op == "SERLN":
-            print(rest, flush=True)
+            text = rest + "\n"
+            if self._serial_cb:
+                self._serial_cb(text)
+            else:
+                print(rest, flush=True)
             self._send("OK")
 
     def _read_until_delay(self) -> float:

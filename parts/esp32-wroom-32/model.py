@@ -140,6 +140,14 @@ class ESP32WROOM32Node(Node):
         self.boot_time_ms = 0
         self.last_activity_ms = 0
 
+        # ─────────────────────────────────────────────────────────────
+        # CURRENT CACHING
+        # Recalculate supply_current_ua only when state changes.
+        # ─────────────────────────────────────────────────────────────
+        self._current_dirty: bool  = True   # force calc on first tick
+        self._v_supply_last: float = -1.0   # last seen VDD voltage
+        self._vdd_net:       str   = ""     # bus net name for VDD
+
     def reset(self):
         """Reset MCU to power-on defaults (called after instantiation or RST assertion)"""
         # GPIO state reset
@@ -186,6 +194,7 @@ class ESP32WROOM32Node(Node):
         self.chip_temperature_c = 25.0
         self.sleep_mode = "none"
         self.boot_time_ms = self._runner.elapsed_ms if self._runner else 0
+        self._current_dirty = True
 
     def tick(self, dt_ms: float):
         """
@@ -216,10 +225,24 @@ class ESP32WROOM32Node(Node):
                 # Watchdog would trigger reset in real hardware
                 self.watchdog_elapsed_ms = 0
 
+        # Supply-voltage change detection: if VDD shifts by more than 50 mV
+        # (e.g. brownout, external switch on the rail), invalidate the cache.
+        if self._bus and self._vdd_net:
+            v_vdd = self._bus.gpio.voltage(self._vdd_net)
+            if abs(v_vdd - self._v_supply_last) > 0.05:
+                self._v_supply_last = v_vdd
+                self._current_dirty = True
+
+        # Only recompute the supply current when something actually changed.
+        # During steady-state operation (idle blink loop etc.) this runs
+        # once at startup and then only when a GPIO / peripheral state changes.
+        if self._current_dirty:
+            self._update_supply_current()
+            self._current_dirty = False
+
         # Feed estimated power dissipation to the thermal engine.
         # The thermal model in physics/thermal.py reads self.power_dissipation
         # each tick to compute junction temperature — don't duplicate it here.
-        self._update_supply_current()
         self.power_dissipation = (
             self.descriptor.get("vdd_nom", 3.3) * self.supply_current_ua
         ) / 1e6
@@ -232,6 +255,8 @@ class ESP32WROOM32Node(Node):
         self._runner  = runner
         self._netlist = netlist
         self._pin_map = PinMap(self.id, netlist, self.descriptor)
+        # Resolve the VDD net name so tick() can watch for supply-voltage changes.
+        self._vdd_net = self.descriptor.get("pins", {}).get("VDD", "")
         self.shim = ArduinoShim(
             node_id  = self.id,
             bus      = bus,
@@ -254,6 +279,10 @@ class ESP32WROOM32Node(Node):
         if self._firmware:
             self._firmware[1](self.shim)
 
+    def _mark_current_dirty(self):
+        """Invalidate the cached supply current so it is recalculated next tick."""
+        self._current_dirty = True
+
     # ─────────────────────────────────────────────────────────────
     # GPIO INTERFACE
     # ─────────────────────────────────────────────────────────────
@@ -269,11 +298,13 @@ class ESP32WROOM32Node(Node):
         if 0 <= gpio < 40:
             self.gpio_levels[gpio] = 1 if value else 0
             self.last_activity_ms = self._runner.elapsed_ms if self._runner else 0
+            self._mark_current_dirty()
 
     def gpio_mode(self, gpio: int, mode: str):
         """Set GPIO mode (input, output, adc, dac, pwm)"""
         if 0 <= gpio < 40:
             self.gpio_modes[gpio] = mode
+            self._mark_current_dirty()
 
     def gpio_pullup(self, gpio: int, enable: bool):
         """Enable/disable internal pull-up"""
@@ -318,6 +349,7 @@ class ESP32WROOM32Node(Node):
     def adc_enable(self, enable: bool):
         """Enable/disable ADC"""
         self.adc_enabled = enable
+        self._mark_current_dirty()
 
     # ─────────────────────────────────────────────────────────────
     # DAC INTERFACE
@@ -329,10 +361,12 @@ class ESP32WROOM32Node(Node):
             self.dac1_value = min(255, max(0, value_8bit))
             self.dac1_enabled = True
             self.last_activity_ms = self._runner.elapsed_ms if self._runner else 0
+            self._mark_current_dirty()
         elif dac_num == 2:
             self.dac2_value = min(255, max(0, value_8bit))
             self.dac2_enabled = True
             self.last_activity_ms = self._runner.elapsed_ms if self._runner else 0
+            self._mark_current_dirty()
 
     def dac_read(self, dac_num: int) -> int:
         """Read current DAC output value"""
@@ -360,12 +394,14 @@ class ESP32WROOM32Node(Node):
             self.ledc_channels[channel]["duty"] = int((duty_percent / 100.0) * ((1 << resolution) - 1))
             self.ledc_channels[channel]["enabled"] = True
             self.last_activity_ms = self._runner.elapsed_ms if self._runner else 0
+            self._mark_current_dirty()
 
     def ledc_write(self, channel: int, duty: int):
         """Write PWM duty cycle (0 to 2^resolution - 1)"""
         if 0 <= channel < 16:
             max_duty = (1 << self.ledc_channels[channel]["resolution"]) - 1
             self.ledc_channels[channel]["duty"] = min(max_duty, max(0, duty))
+            self._mark_current_dirty()
 
     def ledc_read_duty(self, channel: int) -> int:
         """Read current PWM duty value"""
@@ -403,6 +439,7 @@ class ESP32WROOM32Node(Node):
             self.uart_configs[uart_num]["baud"] = baud
             self.uart_configs[uart_num]["data_bits"] = data_bits
             self.uart_configs[uart_num]["stop_bits"] = stop_bits
+            self._mark_current_dirty()
 
     # ─────────────────────────────────────────────────────────────
     # TIMER INTERFACE
@@ -418,11 +455,13 @@ class ESP32WROOM32Node(Node):
         """Start timer"""
         if 0 <= timer_idx < 4:
             self.timers[timer_idx]["enabled"] = True
+            self._mark_current_dirty()
 
     def timer_stop(self, timer_idx: int):
         """Stop timer"""
         if 0 <= timer_idx < 4:
             self.timers[timer_idx]["enabled"] = False
+            self._mark_current_dirty()
 
     def timer_set_alarm(self, timer_idx: int, alarm_value: int):
         """Set timer alarm value"""
@@ -477,6 +516,7 @@ class ESP32WROOM32Node(Node):
     def set_sleep_mode(self, mode: str):
         """Set sleep mode (none, light, deep)"""
         self.sleep_mode = mode
+        self._mark_current_dirty()
 
     def get_chip_temperature(self) -> float:
         """Get simulated chip temperature in Celsius"""

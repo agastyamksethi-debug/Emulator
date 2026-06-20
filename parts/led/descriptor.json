@@ -11,6 +11,7 @@
 
   "vf": 2.0,
   "if_ma": 20,
+  "series_r": 0,
   "color": "red",
 
   "simulation_model": "parts.led.model.LEDNode"

@@ -6,16 +6,20 @@
  * a response over stdin.  Python drives the simulation bus and responds.
  *
  * Protocol (C++ → Python, one line each):
- *   PM  <pin> <mode>    pinMode         → OK
- *   DW  <pin> <val>     digitalWrite    → OK
- *   DR  <pin>           digitalRead     → <int>
- *   AR  <pin>           analogRead      → <int>
- *   AW  <pin> <val>     analogWrite     → OK
- *   DELAY <ms>          delay()         → OK  (after sim advances)
- *   MILLIS              millis()        → <int>
- *   SER <text>          Serial.print    → OK
- *   SERLN <text>        Serial.println  → OK
- *   READY               setup() done   (no response)
+ *   PM  <pin> <mode>              pinMode          → OK
+ *   DW  <pin> <val>              digitalWrite     → OK
+ *   DR  <pin>                    digitalRead      → <int>
+ *   AR  <pin>                    analogRead       → <int>
+ *   AW  <pin> <val>              analogWrite      → OK
+ *   LEDC_SETUP <ch> <freq> <res> ledcSetup        → OK
+ *   LEDC_ATTACH <pin> <ch>       ledcAttachPin    → OK
+ *   LEDC_WRITE <ch> <duty>       ledcWrite        → OK
+ *   LEDC_DETACH <pin>            ledcDetachPin    → OK
+ *   DELAY <ms>                   delay()          → OK  (after sim advances)
+ *   MILLIS                       millis()         → <int>
+ *   SER <text>                   Serial.print     → OK
+ *   SERLN <text>                 Serial.println   → OK
+ *   READY                        setup() done    (no response)
  */
 
 #include <cstdio>
@@ -102,6 +106,36 @@ inline void analogWrite(int pin, int value) {
 }
 
 inline void dacWrite(int pin, int value) { analogWrite(pin, value); }
+
+// ── LEDC / PWM (ESP32) ───────────────────────────────────────────────────────
+// Classic API: ledcSetup → ledcAttachPin → ledcWrite
+inline void ledcSetup(int channel, double freq, int resolution_bits) {
+    char msg[64];
+    snprintf(msg, sizeof(msg), "LEDC_SETUP %d %.2f %d", channel, freq, resolution_bits);
+    _sim_writeln(msg);
+    _sim_recv_ok();
+}
+
+inline void ledcAttachPin(int pin, int channel) {
+    char msg[32];
+    snprintf(msg, sizeof(msg), "LEDC_ATTACH %d %d", pin, channel);
+    _sim_writeln(msg);
+    _sim_recv_ok();
+}
+
+inline void ledcWrite(int channel, int duty) {
+    char msg[32];
+    snprintf(msg, sizeof(msg), "LEDC_WRITE %d %d", channel, duty);
+    _sim_writeln(msg);
+    _sim_recv_ok();
+}
+
+inline void ledcDetachPin(int pin) {
+    char msg[32];
+    snprintf(msg, sizeof(msg), "LEDC_DETACH %d", pin);
+    _sim_writeln(msg);
+    _sim_recv_ok();
+}
 
 // ── Timing ───────────────────────────────────────────────────────────────────
 inline void delay(unsigned long ms) {

@@ -1,0 +1,363 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<link rel="stylesheet" href="__CSS__">
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html, body { width: 100%; height: 100%; background: #FDF6E3; overflow: hidden; }
+  #container { width: 100%; height: 100%; }
+</style>
+</head>
+<body>
+<div id="container"></div>
+<script>
+  window.__getContent = function() {
+    return window._ed ? window._ed.getValue() : (window.__pending || '');
+  };
+  window.__setContent = function(text) {
+    if (window._ed) {
+      window._ed.setValue(text);
+      window._ed.setScrollPosition({ scrollTop: 0 });
+    } else {
+      window.__pending = text;
+    }
+  };
+  window.__setReadOnly = function(v) {
+    if (window._ed) window._ed.updateOptions({ readOnly: v });
+  };
+  window.__focus = function() {
+    if (window._ed) window._ed.focus();
+  };
+
+  window.MonacoEnvironment = {
+    getWorkerUrl: function(_moduleId, _label) {
+      return 'data:text/javascript;charset=utf-8,' +
+             encodeURIComponent('self.onmessage=function(e){};');
+    }
+  };
+
+  var script = document.createElement('script');
+  script.src = '__LOADER__';
+  script.onload = function() {
+
+    require.config({ paths: { vs: '__VS__' } });
+    require(['vs/editor/editor.main'], function() {
+
+      // ── Arduino language (superset of C++ with API coloring) ──────────────
+      monaco.languages.register({ id: 'arduino', extensions: ['.ino'], aliases: ['Arduino','arduino'] });
+
+      monaco.languages.setLanguageConfiguration('arduino', {
+        comments: { lineComment: '//', blockComment: ['/*','*/'] },
+        brackets: [['{','}'],['[',']'],['(',')']],
+        autoClosingPairs: [
+          {open:'[',close:']'},{open:'{',close:'}'},{open:'(',close:')'},
+          {open:"'",close:"'",notIn:['string','comment']},{open:'"',close:'"',notIn:['string']}
+        ],
+        surroundingPairs: [
+          {open:'{',close:'}'},{open:'[',close:']'},{open:'(',close:')'},
+          {open:'"',close:'"'},{open:"'",close:"'"}
+        ],
+        folding: {
+          markers: {
+            start: new RegExp('^\\s*#pragma\\s+region\\b'),
+            end:   new RegExp('^\\s*#pragma\\s+endregion\\b')
+          }
+        }
+      });
+
+      monaco.languages.setMonarchTokensProvider('arduino', {
+        defaultToken: '',
+        tokenPostfix: '.cpp',
+
+        brackets: [
+          {token:'delimiter.curly',     open:'{', close:'}'},
+          {token:'delimiter.parenthesis',open:'(',close:')'},
+          {token:'delimiter.square',    open:'[', close:']'},
+          {token:'delimiter.angle',     open:'<', close:'>'}
+        ],
+
+        // Standard C++ keywords (from Monaco's built-in cpp tokenizer)
+        keywords: [
+          'abstract','amp','array','auto','bool','break','case','catch','char',
+          'class','const','constexpr','const_cast','continue','cpu','decltype',
+          'default','delegate','delete','do','double','dynamic_cast','each','else',
+          'enum','event','explicit','export','extern','false','final','finally',
+          'float','for','friend','gcnew','generic','goto','if','in','initonly',
+          'inline','int','interface','interior_ptr','internal','literal','long',
+          'mutable','namespace','new','noexcept','nullptr','__nullptr','operator',
+          'override','partial','pascal','pin_ptr','private','property','protected',
+          'public','ref','register','reinterpret_cast','restrict','return',
+          'safe_cast','sealed','short','signed','sizeof','static','static_assert',
+          'static_cast','struct','switch','template','this','thread_local','throw',
+          'tile_static','true','try','typedef','typeid','typename','union',
+          'unsigned','using','virtual','void','volatile','wchar_t','where','while',
+          // Arduino types
+          'String','boolean','byte','word'
+        ],
+
+        // Arduino class objects → teal #4EC9B0
+        arduinoObjects: [
+          'Serial','Serial1','Serial2','Serial3',
+          'Wire','Wire1','SPI','EEPROM',
+          'Ethernet','WiFi','SD','Servo',
+          'Keyboard','Mouse'
+        ],
+
+        // Arduino built-in functions → yellow #DCDCAA
+        arduinoFunctions: [
+          'pinMode','digitalWrite','digitalRead',
+          'analogWrite','analogRead','analogReference',
+          'delay','delayMicroseconds','millis','micros',
+          'map','constrain','random','randomSeed',
+          'tone','noTone','shiftIn','shiftOut',
+          'pulseIn','pulseInLong',
+          'attachInterrupt','detachInterrupt','interrupts','noInterrupts',
+          'setup','loop',
+          'ledcSetup','ledcAttachPin','ledcWrite','ledcDetachPin',
+          'ledcRead','ledcReadFreq','ledcWriteTone','ledcWriteNote',
+          'abs','min','max','pow','sqrt','sin','cos','tan'
+        ],
+
+        // Arduino constants → light blue #9CDCFE
+        arduinoConstants: [
+          'HIGH','LOW',
+          'INPUT','OUTPUT','INPUT_PULLUP','INPUT_PULLDOWN',
+          'LED_BUILTIN',
+          'PI','HALF_PI','TWO_PI','DEG_TO_RAD','RAD_TO_DEG',
+          'LSBFIRST','MSBFIRST',
+          'CHANGE','RISING','FALLING',
+          'A0','A1','A2','A3','A4','A5','A6','A7',
+          'NULL','nullptr'
+        ],
+
+        operators: [
+          '=','>','<','!','~','?',':','==','<=','>=','!=',
+          '&&','||','++','--','+','-','*','/','&','|','^','%',
+          '<<','>>','+=','-=','*=','/=','&=','|=','^=','%=','<<=','>>='
+        ],
+
+        symbols:      /[=><!~?:&|+\-*\/\^%]+/,
+        escapes:      /\\(?:[0abfnrtv\\"']|x[0-9A-Fa-f]{1,4}|u[0-9A-Fa-f]{4}|U[0-9A-Fa-f]{8})/,
+        integersuffix:/([uU](ll|LL|l|L)|(ll|LL|l|L)?[uU]?)/,
+        floatsuffix:  /[fFlL]?/,
+        encoding:     /u|u8|U|L/,
+
+        tokenizer: {
+          root: [
+            [/@encoding?R\"(?:([^ ()\\\t]*))\(/, {token:'string.raw.begin', next:'@raw.$1'}],
+            [/[a-zA-Z_]\w*/, {cases: {
+              '@arduinoObjects':   'support.class.arduino',
+              '@arduinoFunctions':'support.function.arduino',
+              '@arduinoConstants':'support.constant.arduino',
+              '@keywords':         {token:'keyword.$0'},
+              '@default':          'identifier'
+            }}],
+            [/^\s*#\s*include/, {token:'keyword.directive.include', next:'@include'}],
+            [/^\s*#\s*\w+/, 'keyword.directive'],
+            {include: '@whitespace'},
+            [/\[\s*\[/, {token:'annotation', next:'@annotation'}],
+            [/[{}()<>\[\]]/, '@brackets'],
+            [/@symbols/, {cases:{'@operators':'delimiter','@default':''}}],
+            [/\d*\d+[eE]([\-+]?\d+)?(@floatsuffix)/,  'number.float'],
+            [/\d*\.\d+([eE][\-+]?\d+)?(@floatsuffix)/, 'number.float'],
+            [/0[xX][0-9a-fA-F']*[0-9a-fA-F](@integersuffix)/, 'number.hex'],
+            [/0[0-7']*[0-7](@integersuffix)/,  'number.octal'],
+            [/0[bB][0-1']*[0-1](@integersuffix)/, 'number.binary'],
+            [/\d[\d']*\d(@integersuffix)/, 'number'],
+            [/\d(@integersuffix)/,          'number'],
+            [/[;,.]/, 'delimiter'],
+            [/"([^"\\]|\\.)*$/, 'string.invalid'],
+            [/"/,  'string', '@string'],
+            [/'[^\\']'/, 'string'],
+            [/(')(@escapes)(')/, ['string','string.escape','string']],
+            [/'/, 'string.invalid']
+          ],
+          whitespace: [
+            [/[ \t\r\n]+/, ''],
+            [/\/\*\*(?!\/)/, 'comment.doc', '@doccomment'],
+            [/\/\*/, 'comment', '@comment'],
+            [/\/\/.*\\$/, 'comment', '@linecomment'],
+            [/\/\/.*$/,    'comment']
+          ],
+          comment: [
+            [/[^\/*]+/, 'comment'],
+            [/\*\//,    'comment', '@pop'],
+            [/[\/*]/,   'comment']
+          ],
+          linecomment: [
+            [/.*[^\\]$/, 'comment', '@pop'],
+            [/[^]+/,     'comment']
+          ],
+          doccomment: [
+            [/[^\/*]+/, 'comment.doc'],
+            [/\*\//,    'comment.doc', '@pop'],
+            [/[\/*]/,   'comment.doc']
+          ],
+          string: [
+            [/[^\\"]+/,  'string'],
+            [/@escapes/, 'string.escape'],
+            [/\\./,      'string.escape.invalid'],
+            [/"/,        'string', '@pop']
+          ],
+          raw: [
+            [/[^)]+/,     'string.raw'],
+            [/\)$S2\"/,   {token:'string.raw.end', next:'@pop'}],
+            [/\)/,        'string.raw']
+          ],
+          annotation: [
+            {include: '@whitespace'},
+            [/using|alignas/, 'keyword'],
+            [/[a-zA-Z0-9_]+/, 'annotation'],
+            [/[,:]/, 'delimiter'],
+            [/[()]/, '@brackets'],
+            [/\]\s*\]/, {token:'annotation', next:'@pop'}]
+          ],
+          include: [
+            [/(\s*)(<)([^<>]*)(>)/, [
+              '', 'keyword.directive.include.begin',
+              'string.include.identifier',
+              {token:'keyword.directive.include.end', next:'@pop'}
+            ]],
+            [/(\s*)(")([^"]*)(")/,  [
+              '', 'keyword.directive.include.begin',
+              'string.include.identifier',
+              {token:'keyword.directive.include.end', next:'@pop'}
+            ]]
+          ]
+        }
+      });
+
+      // ── Solarized Light theme with Arduino API accents ────────────────────
+      monaco.editor.defineTheme('arduino-solarized', {
+        base: 'vs',
+        inherit: true,
+        rules: [
+          // Arduino API
+          { token: 'support.class.arduino',    foreground: '268BD2' },  // blue   – Serial, Wire
+          { token: 'support.function.arduino', foreground: 'CB4B16' },  // orange – pinMode, delay
+          { token: 'support.constant.arduino', foreground: '859900' },  // green  – HIGH, LOW
+          // Language tokens (Solarized Light mapping)
+          { token: 'comment',     foreground: '93A1A1', fontStyle: 'italic' },
+          { token: 'comment.doc', foreground: '93A1A1', fontStyle: 'italic' },
+          { token: 'string',      foreground: '2AA198' },  // cyan
+          { token: 'number',      foreground: '2AA198' },  // cyan
+          { token: 'keyword',     foreground: '859900' },  // green
+          { token: 'delimiter',   foreground: '657B83' },
+        ],
+        colors: {
+          'editor.background':              '#FDF6E3',
+          'editor.foreground':              '#657B83',
+          'editor.lineHighlightBackground': '#EEE8D5',
+          'editorLineNumber.foreground':    '#93A1A1',
+          'editorLineNumber.activeForeground': '#657B83',
+          'editorCursor.foreground':        '#CB4B16',
+          'editor.selectionBackground':     '#D4E5F7',
+          'editorIndentGuide.background1':  '#EEE8D5',
+          'editorIndentGuide.activeBackground1': '#93A1A1',
+          'editorWidget.background':        '#EEE8D5',
+          'editorSuggestWidget.background': '#EEE8D5',
+          'editorSuggestWidget.border':     '#93A1A1',
+          'editorSuggestWidget.selectedBackground': '#FDF6E3',
+        }
+      });
+
+      // ── Arduino completions ────────────────────────────────────────────────
+      monaco.languages.registerCompletionItemProvider('arduino', {
+        provideCompletionItems: function(model, position) {
+          var word  = model.getWordUntilPosition(position);
+          var range = {
+            startLineNumber: position.lineNumber, endLineNumber: position.lineNumber,
+            startColumn: word.startColumn,        endColumn:   word.endColumn
+          };
+          var snips = [
+            ['setup',  'void setup() {\n\t$0\n}',                                  'Arduino setup()'],
+            ['loop',   'void loop() {\n\t$0\n}',                                   'Arduino loop()'],
+            ['for',    'for (int ${1:i} = 0; ${1:i} < ${2:n}; ${1:i}++) {\n\t$0\n}', 'for loop'],
+            ['while',  'while (${1:condition}) {\n\t$0\n}',                        'while loop'],
+            ['if',     'if (${1:condition}) {\n\t$0\n}',                           'if statement'],
+            ['ifelse', 'if (${1:condition}) {\n\t$0\n} else {\n\t\n}',            'if/else'],
+            ['serial', 'Serial.begin(${1:115200});\n$0',                           'Serial.begin'],
+            ['pinout', 'pinMode(${1:pin}, ${2:OUTPUT});\n$0',                      'pinMode'],
+          ];
+          var api = [
+            'pinMode','digitalWrite','digitalRead','analogWrite','analogRead',
+            'delay','delayMicroseconds','millis','micros',
+            'Serial','Serial.begin','Serial.print','Serial.println',
+            'Serial.read','Serial.available',
+            'map','constrain','abs','min','max',
+            'ledcSetup','ledcAttachPin','ledcWrite','ledcDetachPin',
+            'HIGH','LOW','INPUT','OUTPUT','INPUT_PULLUP','INPUT_PULLDOWN','LED_BUILTIN',
+          ];
+          var suggestions = snips.map(function(s) {
+            return {
+              label: s[0], kind: monaco.languages.CompletionItemKind.Snippet,
+              insertText: s[1], documentation: s[2], range: range,
+              insertTextRules: monaco.languages.CompletionItemInsertTextRule.InsertAsSnippet,
+            };
+          }).concat(api.map(function(name) {
+            return {
+              label: name, kind: monaco.languages.CompletionItemKind.Function,
+              insertText: name, range: range,
+            };
+          }));
+          return { suggestions: suggestions };
+        }
+      });
+
+      // ── Create editor ──────────────────────────────────────────────────────
+      window._ed = monaco.editor.create(document.getElementById('container'), {
+        value:    window.__pending !== undefined ? window.__pending : '',
+        language: 'arduino',
+        theme:    'arduino-solarized',
+
+        fontSize:   13,
+        fontFamily: 'Menlo, Consolas, "Courier New", monospace',
+        lineHeight: 22,
+
+        minimap: { enabled: true, scale: 1, showSlider: 'always', renderCharacters: true },
+
+        tabSize:      4,
+        insertSpaces: true,
+        autoIndent:   'full',
+
+        autoClosingBrackets:     'always',
+        autoClosingQuotes:       'always',
+        autoSurround:            'languageDefined',
+        bracketPairColorization: { enabled: true },
+        matchBrackets:           'always',
+
+        // Indent guides on (subtle gray), bracket-pair colour highlight off
+        guides: { bracketPairs: false, indentation: true },
+
+        smoothScrolling:      true,
+        scrollBeyondLastLine: false,
+        scrollbar: {
+          verticalScrollbarSize:   10,
+          horizontalScrollbarSize: 10,
+          useShadows:              false,
+        },
+
+        renderLineHighlight:        'all',
+        cursorBlinking:             'smooth',
+        cursorSmoothCaretAnimation: 'on',
+        renderWhitespace:           'selection',
+        padding:                    { top: 8, bottom: 8 },
+
+        folding:             true,
+        showFoldingControls: 'mouseover',
+        wordWrap:            'off',
+        suggest:         { showKeywords: true, showSnippets: true },
+        quickSuggestions:{ other: true, comments: false, strings: false },
+        parameterHints:  { enabled: true },
+        automaticLayout: true,
+      });
+
+      delete window.__pending;
+      if (window._ed) window._ed.focus();
+    });
+  };
+  document.head.appendChild(script);
+</script>
+</body>
+</html>

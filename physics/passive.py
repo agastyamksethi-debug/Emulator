@@ -243,13 +243,16 @@ class Diode:
         self.power:            float = 0.0   # W (I × Vf)
         self._cathode_voltage: float = 0.0   # driven value when conducting
 
-    def tick(self, v_anode: float, v_cathode: float) -> None:
+    def tick(self, v_anode: float, v_cathode: float,
+             r_series: float = 10.0) -> None:
         if v_anode - v_cathode > self.Vf:
             self.conducting       = True
             self._cathode_voltage = v_anode - self.Vf
-            # Estimate current assuming ~10 Ω source impedance (conservative)
-            self.current          = (v_anode - v_cathode - self.Vf) / 10.0
-            self.power            = self.current * self.Vf
+            # I = (V_source - Vf) / R_series
+            # In the simulation V_anode ≈ V_source (resistor propagates source
+            # voltage to the anode net), so the formula is:
+            self.current = max(0.0, (v_anode - self.Vf) / r_series)
+            self.power   = self.current * self.Vf
         else:
             self.conducting       = False
             self._cathode_voltage = 0.0
@@ -460,7 +463,15 @@ class PassiveModel:
         for d in self.diodes:
             v_a = vmap.get(d.net_anode,   0.0)
             v_k = vmap.get(d.net_cathode, 0.0)
-            d.tick(v_a, v_k)
+
+            # Find the total series resistance connected to the anode net
+            # (handles: GPIO → R → LED → GND layout)
+            r_series = sum(
+                r.R for r in self.resistors
+                if r.net_b == d.net_anode or r.net_a == d.net_anode
+            ) or 10.0
+
+            d.tick(v_a, v_k, r_series)
             if d.conducting and d.net_cathode:
                 gpio_bus.drive(d.net_cathode, f"_diode_{d.id}", d._cathode_voltage)
             elif d.net_cathode:
