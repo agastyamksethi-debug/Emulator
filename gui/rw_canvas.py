@@ -18,7 +18,7 @@ Architecture
 
 from __future__ import annotations
 from PyQt6.QtWidgets import (
-    QWidget, QVBoxLayout, QHBoxLayout, QPushButton,
+    QWidget, QVBoxLayout, QHBoxLayout,
     QGraphicsScene, QGraphicsView, QGraphicsItem,
     QGraphicsEllipseItem, QGraphicsPathItem, QLabel,
 )
@@ -67,12 +67,14 @@ class _Port(QGraphicsEllipseItem):
     """Small circle on a node.  Carries rw_type and direction."""
 
     def __init__(self, rw_type: str, direction: str,
-                 label: str = "", parent: QGraphicsItem = None):
+                 label: str = "", port_id: str = "",
+                 parent: QGraphicsItem = None):
         r = _PORT_R
         super().__init__(-r, -r, r * 2, r * 2, parent)
         self.rw_type   = rw_type
         self.direction = direction   # "input" | "output"
         self.label     = label
+        self.port_id   = port_id    # unique bus address e.g. "D1:light"
 
         clr = _PORT_CLR.get(rw_type, QColor("#888888"))
         self.setBrush(QBrush(clr))
@@ -129,6 +131,12 @@ class _Wire(QGraphicsPathItem):
         path.lineTo(p2)
         self.setPath(path)
 
+    def shape(self):
+        from PyQt6.QtGui import QPainterPathStroker
+        s = QPainterPathStroker()
+        s.setWidth(10)
+        return s.createStroke(self.path())
+
 
 # ── base node ─────────────────────────────────────────────────────────────────
 
@@ -169,12 +177,39 @@ class _BaseNode(QGraphicsItem):
         painter.setPen(QPen(_ACCENT, 2))
         painter.drawLine(int(self._CR), 1, int(self._W - self._CR), 1)
 
-    def _add_port(self, rw_type: str, direction: str, label: str,
-                  lx: float, ly: float) -> _Port:
-        p = _Port(rw_type, direction, label, parent=self)
-        p.setPos(lx, ly)
+    def _add_port(self, rw_type: str, direction: str, label: str) -> _Port:
+        same_type = [p for p in self._ports if p.rw_type == rw_type]
+        n = len(same_type)
+        if n == 0:
+            pid = f"{self.ref}:{rw_type}"
+        else:
+            # Multiple ports of same signal type — suffix with direction
+            dir_tag = "in" if direction == "input" else "out"
+            pid = f"{self.ref}:{rw_type}_{dir_tag}"
+            if n == 1:
+                # Rename the first port retroactively
+                prev_tag = "in" if same_type[0].direction == "input" else "out"
+                same_type[0].port_id = f"{self.ref}:{rw_type}_{prev_tag}"
+        p = _Port(rw_type, direction, label, port_id=pid, parent=self)
         self._ports.append(p)
+        self._layout_ports()
         return p
+
+    def _layout_ports(self):
+        inputs  = [p for p in self._ports if p.direction == "input"]
+        outputs = [p for p in self._ports if p.direction == "output"]
+
+        def _place(ports, x):
+            n = len(ports)
+            if not n:
+                return
+            margin = 48
+            step   = (self._H - 2 * margin) / n
+            for i, p in enumerate(ports):
+                p.setPos(x, margin + step * i + step / 2)
+
+        _place(inputs,  0)
+        _place(outputs, self._W)
 
     def ports(self) -> list[_Port]:
         return self._ports
@@ -191,10 +226,7 @@ class _LEDNode(_BaseNode):
         self._brightness = 0.0
         self._led_color  = QColor(color)
 
-        self._port_light = self._add_port(
-            "light", "output", "Light",
-            self._W / 2, self._H - 16
-        )
+        self._port_light = self._add_port("light", "output", "Light")
 
     def update_state(self, on: bool, brightness: float = 1.0):
         self._on         = on
@@ -275,18 +307,13 @@ class _LEDNode(_BaseNode):
         painter.setPen(pill_fg)
         painter.drawText(pill_rect, Qt.AlignmentFlag.AlignCenter, state_txt)
 
-        # ── port connector trace (12 px above port) ───────────────────────────
-        port_y    = H - 16
-        label_y   = port_y - 14
-        trc = QColor(_TEXT_SEC); trc.setAlpha(80)
-        painter.setPen(QPen(trc, 1, Qt.PenStyle.DotLine))
-        painter.drawLine(QPointF(W / 2 - 20, port_y), QPointF(W / 2 - 9, port_y))
-        painter.drawLine(QPointF(W / 2 + 9,  port_y), QPointF(W / 2 + 20, port_y))
-
+        # ── right-edge port label ─────────────────────────────────────────────
         f3 = QFont("SF Pro Text,Helvetica,Arial,sans-serif", 7)
         painter.setFont(f3)
         painter.setPen(_TEXT_SEC)
-        painter.drawText(QRectF(0, label_y, W, 12), Qt.AlignmentFlag.AlignHCenter, "LIGHT OUT")
+        painter.drawText(QRectF(W - 52, H / 2 - 8, 42, 14),
+                         Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter,
+                         "LIGHT")
 
 
 # ── Photoresistor (LDR) node ──────────────────────────────────────────────────
@@ -297,11 +324,7 @@ class _LDRNode(_BaseNode):
     def __init__(self, ref: str):
         super().__init__(ref, "PHOTORESISTOR")
 
-        # light input on left-centre
-        self._port_light = self._add_port(
-            "light", "input", "Light",
-            0, self._H / 2
-        )
+        self._port_light = self._add_port("light", "input", "Light")
 
     def paint(self, painter: QPainter, option, widget):
         super().paint(painter, option, widget)
@@ -497,10 +520,122 @@ class _ButtonNode(_BaseNode):
                          state_txt)
 
 
+# ── loss / attenuator node ────────────────────────────────────────────────────
+
+class _LossNode(_BaseNode):
+    _H = 155
+
+    def __init__(self, ref: str, loss_pct: float = 30.0,
+                 signal_type: str = "light"):
+        super().__init__(ref, "LOSS")
+        self._loss_pct    = max(0.0, min(100.0, loss_pct))
+        self._signal_type = signal_type
+        self._in_val:  float = 0.0
+        self._out_val: float = 0.0
+        self._press_pos    = QPointF(0.0, 0.0)
+
+        self._port_in  = self._add_port(signal_type, "input",  "In")
+        self._port_out = self._add_port(signal_type, "output", "Out")
+
+    @property
+    def attenuation(self) -> float:
+        return 1.0 - self._loss_pct / 100.0
+
+    def update_state(self, in_val: float, out_val: float):
+        self._in_val  = in_val
+        self._out_val = out_val
+        self.update()
+
+    # ── wire-splice on drag-release ───────────────────────────────────────────
+
+    def mousePressEvent(self, ev):
+        self._press_pos = self.scenePos()
+        super().mousePressEvent(ev)
+
+    def mouseReleaseEvent(self, ev):
+        super().mouseReleaseEvent(ev)
+        dp = self.scenePos() - self._press_pos
+        if dp.x() ** 2 + dp.y() ** 2 > 100:
+            self._try_splice()
+
+    def _try_splice(self):
+        scene = self.scene()
+        if scene is None:
+            return
+        cx = self.mapToScene(QPointF(self._W / 2, self._H / 2))
+        check = QRectF(cx.x() - 28, cx.y() - 28, 56, 56)
+        for item in scene.items(check, Qt.ItemSelectionMode.IntersectsItemShape):
+            if (isinstance(item, _Wire)
+                    and item.src.parentItem() is not self
+                    and item.dst.parentItem() is not self):
+                scene.splice_wire(item, self)
+                return
+
+    # ── paint ─────────────────────────────────────────────────────────────────
+
+    def paint(self, painter: QPainter, option, widget):
+        super().paint(painter, option, widget)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        W, H = self._W, self._H
+
+        # ref label
+        f_ref = QFont("Menlo,Consolas,Courier New,monospace", 8, QFont.Weight.Bold)
+        painter.setFont(f_ref)
+        painter.setPen(_TEXT_PRI)
+        painter.drawText(QRectF(12, 14, W - 52, 14), Qt.AlignmentFlag.AlignLeft, self.ref)
+
+        # type badge
+        badge_rect = QRectF(W - 40, 13, 28, 14)
+        painter.setBrush(QBrush(QColor("#FDF6E3")))
+        bdr = QColor(_TEXT_SEC); bdr.setAlpha(100)
+        painter.setPen(QPen(bdr, 0.5))
+        painter.drawRoundedRect(badge_rect, 6, 6)
+        f_b = QFont("SF Pro Text,Helvetica,Arial,sans-serif", 7, QFont.Weight.Bold)
+        painter.setFont(f_b)
+        painter.setPen(_TEXT_SEC)
+        painter.drawText(badge_rect, Qt.AlignmentFlag.AlignCenter, "LOSS")
+
+        # big loss percentage
+        f_big = QFont("SF Pro Text,Helvetica,Arial,sans-serif", 24, QFont.Weight.Bold)
+        painter.setFont(f_big)
+        painter.setPen(_ACCENT)
+        painter.drawText(QRectF(0, 36, W, 36), Qt.AlignmentFlag.AlignCenter,
+                         f"{int(self._loss_pct)}%")
+
+        # signal type sub-label
+        f_sub = QFont("SF Pro Text,Helvetica,Arial,sans-serif", 8)
+        painter.setFont(f_sub)
+        painter.setPen(_TEXT_SEC)
+        painter.drawText(QRectF(0, 76, W, 14), Qt.AlignmentFlag.AlignCenter,
+                         self._signal_type.upper() + " ATTENUATION")
+
+        # live in → out values (shown once data flows)
+        if self._in_val > 0.001 or self._out_val > 0.001:
+            f_val = QFont("Menlo,Consolas,Courier New,monospace", 8)
+            painter.setFont(f_val)
+            painter.setPen(_TEXT_PRI)
+            painter.drawText(QRectF(0, 95, W, 14), Qt.AlignmentFlag.AlignCenter,
+                             f"{self._in_val:.2f} → {self._out_val:.2f}")
+        else:
+            f_hint = QFont("SF Pro Text,Helvetica,Arial,sans-serif", 7)
+            painter.setFont(f_hint)
+            painter.setPen(_TEXT_SEC)
+            painter.drawText(QRectF(0, 95, W, 14), Qt.AlignmentFlag.AlignCenter,
+                             "drop onto a wire to splice")
+
+        # left / right port labels
+        f_port = QFont("SF Pro Text,Helvetica,Arial,sans-serif", 7)
+        painter.setFont(f_port)
+        painter.setPen(_TEXT_SEC)
+        painter.drawText(QRectF(8,     H / 2 - 18, 36, 12), Qt.AlignmentFlag.AlignLeft,  "IN")
+        painter.drawText(QRectF(W - 44, H / 2 - 18, 36, 12), Qt.AlignmentFlag.AlignRight, "OUT")
+
+
 # ── scene (handles port-drag wiring) ─────────────────────────────────────────
 
 class _RWScene(QGraphicsScene):
-    connection_made = pyqtSignal(str, str, str)   # src_id, dst_id, rw_type
+    connection_made    = pyqtSignal(str, str, str)   # src_id, dst_id, rw_type
+    connection_removed = pyqtSignal(str, str)         # src_id, dst_id
 
     def __init__(self):
         super().__init__()
@@ -560,19 +695,38 @@ class _RWScene(QGraphicsScene):
                 self.addItem(wire)
                 out_p.add_wire(wire)
                 in_p.add_wire(wire)
-                # emit bus-level ids
-                out_id = f"{out_p.parentItem().ref}:{out_p.rw_type}"
-                in_id  = f"{in_p.parentItem().ref}:{in_p.rw_type}"
-                self.connection_made.emit(out_id, in_id, src.rw_type)
+                self.connection_made.emit(out_p.port_id, in_p.port_id, src.rw_type)
 
             ev.accept()
             return
         super().mouseReleaseEvent(ev)
 
     def remove_wire(self, wire: _Wire):
+        src_id = wire.src.port_id
+        dst_id = wire.dst.port_id
         wire.src.remove_wire(wire)
         wire.dst.remove_wire(wire)
         self.removeItem(wire)
+        self.connection_removed.emit(src_id, dst_id)
+
+    def splice_wire(self, wire: _Wire, node: "_BaseNode"):
+        """Remove wire and re-route it through node's input and output ports."""
+        src_port = wire.src
+        dst_port = wire.dst
+        in_port  = next((p for p in node.ports() if p.direction == "input"),  None)
+        out_port = next((p for p in node.ports() if p.direction == "output"), None)
+        if in_port is None or out_port is None:
+            return
+        if in_port.rw_type != src_port.rw_type:
+            return
+        self.remove_wire(wire)
+        w1 = _Wire(src_port, in_port)
+        w2 = _Wire(out_port, dst_port)
+        self.addItem(w1);  self.addItem(w2)
+        src_port.add_wire(w1);  in_port.add_wire(w1)
+        out_port.add_wire(w2); dst_port.add_wire(w2)
+        self.connection_made.emit(src_port.port_id, in_port.port_id,  src_port.rw_type)
+        self.connection_made.emit(out_port.port_id, dst_port.port_id, out_port.rw_type)
 
 
 # ── view ──────────────────────────────────────────────────────────────────────
@@ -621,19 +775,6 @@ class _RWView(QGraphicsView):
         super().mouseReleaseEvent(ev)
 
 
-# ── toolbar button helper ─────────────────────────────────────────────────────
-
-def _tbtn(label: str) -> QPushButton:
-    b = QPushButton(label)
-    b.setFixedHeight(22)
-    b.setStyleSheet(
-        "QPushButton { background:#FDF6E3; color:#657B83; border:1px solid #93A1A1; "
-        "border-radius:3px; padding:0 10px; font-size:10px; }"
-        "QPushButton:hover { background:#EEE8D5; color:#586E75; }"
-    )
-    return b
-
-
 # ── public canvas widget ──────────────────────────────────────────────────────
 
 class RWCanvas(QWidget):
@@ -670,28 +811,14 @@ class RWCanvas(QWidget):
         title = QLabel("Real World")
         title.setStyleSheet("color:#657B83; font-size:11px;")
         hbox.addWidget(title)
-        hbox.addStretch()
-
-        btn_led = _tbtn("+ LED")
-        btn_ldr = _tbtn("+ LDR")
-        btn_btn = _tbtn("+ Button")
-        btn_led.clicked.connect(self._add_led_interactive)
-        btn_ldr.clicked.connect(self._add_ldr_interactive)
-        btn_btn.clicked.connect(self._add_button_interactive)
-        hbox.addWidget(btn_led)
-        hbox.addWidget(btn_ldr)
-        hbox.addWidget(btn_btn)
         layout.addWidget(header)
 
         self._scene = _RWScene()
         self._scene.setSceneRect(-2000, -2000, 4000, 4000)
         self._scene.connection_made.connect(self._on_connection)
+        self._scene.connection_removed.connect(self._on_disconnection)
         self._view = _RWView(self._scene)
         layout.addWidget(self._view)
-
-        self._next_led = 1
-        self._next_ldr = 1
-        self._next_btn = 1
 
     # ── node addition ─────────────────────────────────────────────────────────
 
@@ -727,6 +854,25 @@ class RWCanvas(QWidget):
         n = self._nodes.get(ref)
         return n if isinstance(n, _ButtonNode) else None
 
+    def add_loss_node(self, ref: str, loss_pct: float = 30.0,
+                      signal_type: str = "light",
+                      pos: tuple[float, float] = (0, 0)) -> _LossNode:
+        node = _LossNode(ref, loss_pct, signal_type)
+        node.setPos(*pos)
+        self._scene.addItem(node)
+        self._nodes[ref] = node
+        # register the internal attenuating connection
+        self.rw_bus.connect(
+            f"{ref}:{signal_type}_in",
+            f"{ref}:{signal_type}_out",
+            loss=node.attenuation,
+        )
+        return node
+
+    def get_loss_node(self, ref: str) -> _LossNode | None:
+        n = self._nodes.get(ref)
+        return n if isinstance(n, _LossNode) else None
+
     # ── sim update ────────────────────────────────────────────────────────────
 
     def update_led(self, ref: str, on: bool, brightness: float = 1.0):
@@ -734,9 +880,9 @@ class RWCanvas(QWidget):
         node = self.get_led(ref)
         if node:
             node.update_state(on, brightness)
-            # propagate to RW bus
             self.rw_bus.set(f"{ref}:light", brightness if on else 0.0)
             self.rw_bus.tick()
+            self._refresh_rw_nodes()
 
     # ── circuit auto-population ───────────────────────────────────────────────
 
@@ -752,39 +898,45 @@ class RWCanvas(QWidget):
             if self._scene:
                 self._scene.removeItem(item)
 
-        _LED_TYPES = {"led", "Device:LED", "Device:LED_ALT"}
-        _BTN_TYPES = {"button", "Device:SW_Push", "Device:SW_Push_Virtual"}
-        _LDR_TYPES = {"ldr", "photoresistor", "Device:R_Photo"}
+        _LED_TYPES  = {"led", "Device:LED", "Device:LED_ALT"}
+        _BTN_TYPES  = {"button", "Device:SW_Push", "Device:SW_Push_Virtual"}
+        _LDR_TYPES  = {"ldr", "photoresistor", "Device:R_Photo"}
+        _LOSS_TYPES = {"loss", "attenuator", "Device:Loss"}
 
-        led_col = 0
-        btn_col = 0
-        ldr_col = 0
+        led_col  = 0
+        btn_col  = 0
+        ldr_col  = 0
+        loss_col = 0
 
         for ref, part_def in circuit.get("parts", {}).items():
             ptype = part_def.get("type", "")
             color = part_def.get("color", "red")
-            # map color name to hex
-            _CLR = {"red": "#ff2020", "green": "#20dd20", "blue": "#2060ff",
-                    "yellow": "#ffdd00", "white": "#ffffff", "orange": "#ff8800"}
+            _CLR  = {"red": "#ff2020", "green": "#20dd20", "blue": "#2060ff",
+                     "yellow": "#ffdd00", "white": "#ffffff", "orange": "#ff8800"}
             hex_color = _CLR.get(color, "#ff2020")
 
             if ptype in _LED_TYPES:
                 x = led_col * 160 - 200
                 self.add_led(ref, color=hex_color, pos=(x, -80))
                 led_col += 1
-                self._next_led = led_col + 1
 
             elif ptype in _BTN_TYPES:
                 x = btn_col * 160 - 200
                 self.add_button(ref, pos=(x, 140))
                 btn_col += 1
-                self._next_btn = btn_col + 1
 
             elif ptype in _LDR_TYPES:
                 x = ldr_col * 200 + 80
                 self.add_ldr(ref, pos=(x, -80))
                 ldr_col += 1
-                self._next_ldr = ldr_col + 1
+
+            elif ptype in _LOSS_TYPES:
+                loss_pct    = float(part_def.get("loss_pct", 30.0))
+                signal_type = part_def.get("signal", "light")
+                x = loss_col * 180 - 90
+                self.add_loss_node(ref, loss_pct=loss_pct,
+                                   signal_type=signal_type, pos=(x, 60))
+                loss_col += 1
 
         self._view.fitInView(
             self._scene.itemsBoundingRect().adjusted(-40, -40, 40, 40),
@@ -803,40 +955,21 @@ class RWCanvas(QWidget):
         if btn_node is not None:
             btn_node.bind_model(node)
 
-    # ── connection handler ────────────────────────────────────────────────────
+    # ── connection handlers ───────────────────────────────────────────────────
 
     def _on_connection(self, src_id: str, dst_id: str, rw_type: str):
         self.rw_bus.connect(src_id, dst_id)
 
-    # ── interactive add (toolbar buttons) ─────────────────────────────────────
+    def _on_disconnection(self, src_id: str, dst_id: str):
+        self.rw_bus.disconnect(src_id, dst_id)
 
-    def _add_led_interactive(self):
-        ref = f"D{self._next_led}"
-        self._next_led += 1
-        # place near centre of current view
-        centre = self._view.mapToScene(
-            self._view.viewport().rect().center()
-        )
-        x = centre.x() - 65 + (self._next_led - 2) * 20
-        y = centre.y() - 100
-        self.add_led(ref, pos=(x, y))
+    def _refresh_rw_nodes(self):
+        """Update loss node live-value displays after each bus tick."""
+        for ref, node in self._nodes.items():
+            if isinstance(node, _LossNode):
+                sig = node._signal_type
+                node.update_state(
+                    self.rw_bus.get(f"{ref}:{sig}_in"),
+                    self.rw_bus.get(f"{ref}:{sig}_out"),
+                )
 
-    def _add_ldr_interactive(self):
-        ref = f"R{self._next_ldr}"
-        self._next_ldr += 1
-        centre = self._view.mapToScene(
-            self._view.viewport().rect().center()
-        )
-        x = centre.x() + 80 + (self._next_ldr - 2) * 20
-        y = centre.y() - 100
-        self.add_ldr(ref, pos=(x, y))
-
-    def _add_button_interactive(self):
-        ref = f"SW{self._next_btn}"
-        self._next_btn += 1
-        centre = self._view.mapToScene(
-            self._view.viewport().rect().center()
-        )
-        x = centre.x() - 65 + (self._next_btn - 2) * 20
-        y = centre.y() - 87
-        self.add_button(ref, pos=(x, y))

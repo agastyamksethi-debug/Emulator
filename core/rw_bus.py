@@ -24,8 +24,9 @@ RW_TYPES = {"light", "heat", "sound", "ir", "force"}
 
 @dataclass
 class RWConnection:
-    src: str   # port id  e.g. "D1:light"
-    dst: str   # port id  e.g. "R1:light"
+    src:  str           # port id  e.g. "D1:light"
+    dst:  str           # port id  e.g. "R1:light"
+    loss: float = 1.0   # output multiplier: 1.0 = lossless, 0.0 = total loss
 
 
 class RWBus:
@@ -41,22 +42,17 @@ class RWBus:
         self._values[port_id] = max(0.0, float(value))
 
     def get(self, port_id: str) -> float:
-        """
-        Component reads its input value.
-        Returns the sum of all connected source values (allows multi-source nets).
-        """
-        total = 0.0
-        for conn in self._connections:
-            if conn.dst == port_id:
-                total += self._values.get(conn.src, 0.0)
-        return min(1.0, total)
+        """Return the most recently propagated value for this port (call after tick)."""
+        return min(1.0, self._values.get(port_id, 0.0))
 
     # ── wiring ────────────────────────────────────────────────────────────────
 
-    def connect(self, src: str, dst: str):
-        """Create a connection from output port → input port."""
+    def connect(self, src: str, dst: str, loss: float = 1.0):
+        """Create a connection from output port → input port with optional attenuation."""
         if not any(c.src == src and c.dst == dst for c in self._connections):
-            self._connections.append(RWConnection(src=src, dst=dst))
+            self._connections.append(
+                RWConnection(src=src, dst=dst, loss=max(0.0, min(1.0, loss)))
+            )
 
     def disconnect(self, src: str, dst: str):
         self._connections = [
@@ -76,15 +72,29 @@ class RWBus:
 
     # ── propagate ─────────────────────────────────────────────────────────────
 
-    def tick(self):
+    def tick(self, max_hops: int = 8):
         """
-        Propagate all output values to listeners.
-        Call this after components have written their outputs for the current tick.
+        Propagate values through the connection graph with loss applied.
+
+        Uses Jacobi relaxation so multi-hop chains (e.g. LED → LossNode → LDR)
+        converge in N+1 waves for a chain of depth N.  After propagation fires
+        registered on_update callbacks.
         """
+        for _ in range(max_hops):
+            updates: dict[str, float] = {}
+            for conn in self._connections:
+                v = self._values.get(conn.src, 0.0) * conn.loss
+                updates[conn.dst] = updates.get(conn.dst, 0.0) + v
+            changed = False
+            for k, v in updates.items():
+                if abs(self._values.get(k, 0.0) - v) > 1e-9:
+                    self._values[k] = v
+                    changed = True
+            if not changed:
+                break
         for conn in self._connections:
-            value = self._values.get(conn.src, 0.0)
             for cb in self._listeners.get(conn.dst, []):
-                cb(value)
+                cb(self._values.get(conn.dst, 0.0))
 
     def on_update(self, dst_port_id: str, callback):
         """Register a callback invoked on tick whenever dst port receives a value."""
