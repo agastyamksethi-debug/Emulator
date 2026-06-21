@@ -1,0 +1,17 @@
+{
+  "part": "FSR",
+  "classification": "ForceSensor",
+  "description": "Force-sensitive resistor in a voltage divider — resistance drops as applied force rises",
+  "protocol": "ANALOG",
+
+  "pins": {
+    "1": {"type": "terminal", "note": "Top terminal (to supply rail)"},
+    "2": {"type": "terminal", "note": "Divider output (to ADC)"}
+  },
+
+  "r_min":   2000,
+  "r_max":   1000000,
+  "r_fixed": 10000,
+
+  "simulation_model": "parts.fsr.model.FSRNode"
+}

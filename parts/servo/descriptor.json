@@ -1,0 +1,17 @@
+{
+  "part": "Servo",
+  "classification": "Servo",
+  "description": "Hobby servo — control signal duty maps to shaft angle 0–180°",
+  "protocol": "PWM",
+
+  "pins": {
+    "SIG": {"type": "control", "note": "PWM control signal"},
+    "VCC": {"type": "power",    "note": "Supply"},
+    "GND": {"type": "ground",   "note": "Ground"}
+  },
+
+  "min_angle": 0,
+  "max_angle": 180,
+
+  "simulation_model": "parts.servo.model.ServoNode"
+}

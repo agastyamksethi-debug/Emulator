@@ -6,7 +6,7 @@ from PyQt6.QtWidgets import (
     QPlainTextEdit, QPushButton, QLineEdit,
 )
 from PyQt6.QtGui import QFont, QColor, QTextCharFormat, QTextCursor
-from PyQt6.QtCore import pyqtSignal
+from PyQt6.QtCore import pyqtSignal, QTimer
 import pyqtgraph as pg
 
 
@@ -25,7 +25,17 @@ class SerialPanel(QWidget):
         self._elapsed_ms: float = 0.0
         self._line_buf:   str   = ""
         self._collapsed   = False
+
+        # incoming serial is buffered and rendered on a timer so the GUI cost
+        # stays bounded no matter how fast the sim emits data
+        self._pending:      str       = ""
+        self._dirty_series: set[str]  = set()
         self._build()
+
+        self._flush_timer = QTimer(self)
+        self._flush_timer.setInterval(50)   # ~20 Hz render
+        self._flush_timer.timeout.connect(self._flush)
+        self._flush_timer.start()
 
     def _build(self):
         layout = QVBoxLayout(self)
@@ -206,6 +216,11 @@ class SerialPanel(QWidget):
         self.setMaximumHeight(self._BAR_H if self._collapsed else 16_777_215)
         self.updateGeometry()
 
+    def expand(self):
+        """Reveal the panel if collapsed, without changing the active tab."""
+        if self._collapsed:
+            self._toggle_collapse()
+
     def show_monitor(self):
         self._switch(0)
 
@@ -232,38 +247,57 @@ class SerialPanel(QWidget):
     # ── public API ────────────────────────────────────────────────────────────
 
     def append(self, text: str):
-        self._line_buf += text
-        while "\n" in self._line_buf:
-            line, _, self._line_buf = self._line_buf.partition("\n")
-            line = line.rstrip("\r")
-            if line:
-                self._display_line(line)
-                self._try_plot(line)
+        """Buffer incoming serial text; the flush timer renders it in batches."""
+        self._pending += text
 
     def reset_plot(self):
         self._plot.clear()
         self._series.clear()
         self._plot_items.clear()
+        self._dirty_series.clear()
         self._color_idx  = 0
         self._elapsed_ms = 0.0
         self._line_buf   = ""
+        self._pending    = ""
         self._plot.addLegend(offset=(10, 10))
 
     def advance_time(self, dt_ms: float):
         self._elapsed_ms += dt_ms
 
-    # ── helpers ───────────────────────────────────────────────────────────────
+    # ── batched render (timer-driven, ~20 Hz) ──────────────────────────────────
 
-    def _display_line(self, line: str):
+    def _flush(self):
+        if not self._pending:
+            return
+        buf = self._line_buf + self._pending
+        self._pending = ""
+        lines = buf.split("\n")
+        self._line_buf = lines.pop()        # trailing partial line
+
+        display: list[str] = []
+        for line in lines:
+            line = line.rstrip("\r")
+            if line:
+                display.append(line)
+                self._collect_plot(line)
+
+        if display:
+            self._display_lines(display)
+        self._redraw_dirty()
+
+    def _display_lines(self, lines: list[str]):
         fmt = QTextCharFormat()
         fmt.setForeground(QColor("#657B83"))
         cur = self._monitor.textCursor()
         cur.movePosition(QTextCursor.MoveOperation.End)
-        cur.insertText(line + "\n", fmt)
+        cur.insertText("\n".join(lines) + "\n", fmt)
         self._monitor.setTextCursor(cur)
         self._monitor.ensureCursorVisible()
 
-    def _try_plot(self, line: str):
+    # ── helpers ───────────────────────────────────────────────────────────────
+
+    def _collect_plot(self, line: str):
+        """Parse a line and append points; defer the redraw to _redraw_dirty()."""
         t = self._elapsed_ms
         pairs = re.findall(
             r'(\w+)\s*:\s*(-?(?:\d+\.?\d*|\.\d+)(?:[eE][+-]?\d+)?)', line
@@ -291,13 +325,24 @@ class SerialPanel(QWidget):
         pts.append((t, v))
         if len(pts) > _MAX_PTS:
             del pts[:len(pts) - _MAX_PTS]
+        self._dirty_series.add(label)
 
-        xs = [p[0] for p in pts]
-        ys = [p[1] for p in pts]
-        self._plot_items[label].setData(xs, ys)
+    def _redraw_dirty(self):
+        """Push accumulated points to the plot once per flush (one setData each)."""
+        if not self._dirty_series:
+            return
+        last_x = None
+        for label in self._dirty_series:
+            pts = self._series.get(label)
+            if not pts:
+                continue
+            xs = [p[0] for p in pts]
+            ys = [p[1] for p in pts]
+            self._plot_items[label].setData(xs, ys)
+            last_x = xs[-1] if last_x is None else max(last_x, xs[-1])
+        self._dirty_series.clear()
 
-        if self._btn_autoscroll.isChecked() and xs:
+        if self._btn_autoscroll.isChecked() and last_x is not None:
             window = 10_000
-            x_max = xs[-1]
-            x_min = max(xs[0], x_max - window)
-            self._plot.setXRange(x_min, x_max, padding=0.02)
+            x_min = max(0.0, last_x - window)
+            self._plot.setXRange(x_min, last_x, padding=0.02)

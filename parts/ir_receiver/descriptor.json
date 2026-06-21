@@ -1,0 +1,16 @@
+{
+  "part": "IR_Receiver",
+  "classification": "IR_Receiver",
+  "description": "Demodulating IR receiver (TSOP-style) — OUT is active-LOW when a modulated IR carrier is present",
+  "protocol": "GPIO",
+
+  "pins": {
+    "OUT": {"type": "digital_out", "note": "Active-low signal output"},
+    "VCC": {"type": "power",       "note": "Supply"},
+    "GND": {"type": "ground",      "note": "Ground"}
+  },
+
+  "threshold": 0.1,
+
+  "simulation_model": "parts.ir_receiver.model.IRReceiverNode"
+}

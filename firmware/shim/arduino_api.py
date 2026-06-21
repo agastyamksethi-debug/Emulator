@@ -244,6 +244,10 @@ class ArduinoShim:
         # Default = adc_vref (11 dB / full-range). Set via analogSetAttenuation().
         self._adc_attenuations: dict[int, float] = {}
 
+        # LEDC channel state
+        self._ledc_channels:    dict[int, dict] = {}   # channel → {resolution, max_duty, pin}
+        self._ledc_pin_channel: dict[int, int]  = {}   # pin → channel
+
         # Set True to simulate WiFi active — blocks ADC2 reads
         self.wifi_active: bool = False
 
@@ -263,6 +267,13 @@ class ArduinoShim:
             if self._pin_map.has_cap(pin, Cap.INPUT_ONLY):
                 raise SimPinError(f"GPIO{pin} is input-only — cannot set OUTPUT")
         self._pin_modes[pin] = mode
+        net = self._pin_map.net(pin)
+        if net:
+            ns = self._bus.gpio.net(net)
+            if mode == INPUT_PULLUP:
+                ns._pull = self._adc_vref
+            elif mode in (INPUT, OUTPUT):
+                ns._pull = None
 
     def digitalWrite(self, pin: int, value: int):
         from firmware.shim.pin_map import Cap
@@ -373,16 +384,43 @@ class ArduinoShim:
         voltage = (value / 255.0) * self._adc_vref
         self._bus.drive(net, self._id, voltage)
 
-    def ledcWrite(self, channel: int, duty: int):
-        """ESP32 LEDC PWM — maps duty to voltage on the attached pin."""
-        # Channel → pin mapping is set by ledcAttachPin; simplification: no-op
-        pass
+    def ledcSetup(self, channel: int, freq: float, resolution: int):
+        self._ledc_channels[channel] = {
+            'resolution': resolution,
+            'max_duty':   (1 << resolution) - 1,
+            'pin':        self._ledc_channels.get(channel, {}).get('pin'),
+        }
 
     def ledcAttachPin(self, pin: int, channel: int):
-        pass
+        self._ledc_pin_channel[pin] = channel
+        if channel not in self._ledc_channels:
+            self._ledc_channels[channel] = {'resolution': 8, 'max_duty': 255, 'pin': None}
+        self._ledc_channels[channel]['pin'] = pin
 
-    def ledcSetup(self, channel: int, freq: float, resolution: int):
-        pass
+    def ledcWrite(self, channel: int, duty: int):
+        """ESP32 LEDC PWM — maps duty to proportional voltage on the attached pin."""
+        info = self._ledc_channels.get(channel)
+        if not info:
+            return
+        pin = info.get('pin')
+        if pin is None:
+            return
+        from firmware.shim.pin_map import Cap
+        if not self._pin_map.has_cap(pin, Cap.PWM):
+            return
+        net = self._pin_map.net(pin)
+        if net is None:
+            return
+        voltage = (duty / info.get('max_duty', 255)) * self._adc_vref
+        self._bus.drive(net, self._id, voltage)
+
+    def ledcDetachPin(self, pin: int):
+        channel = self._ledc_pin_channel.pop(pin, None)
+        if channel is not None and channel in self._ledc_channels:
+            self._ledc_channels[channel]['pin'] = None
+        net = self._pin_map.net(pin)
+        if net:
+            self._bus.gpio.release(net, self._id)
 
     # ------------------------------------------------------- interrupts ------
 

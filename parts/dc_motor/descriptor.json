@@ -1,0 +1,17 @@
+{
+  "part": "Motor_DC",
+  "classification": "Motor",
+  "description": "Brushed DC motor — speed proportional to the voltage across its terminals",
+  "protocol": "ANALOG",
+
+  "pins": {
+    "1": {"type": "terminal", "note": "Terminal A (+)"},
+    "2": {"type": "terminal", "note": "Terminal B (−)"}
+  },
+
+  "max_rpm":     9000,
+  "v_nominal":   3.3,
+  "v_stall":     0.3,
+
+  "simulation_model": "parts.dc_motor.model.DCMotorNode"
+}

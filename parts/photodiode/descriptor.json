@@ -1,0 +1,15 @@
+{
+  "part": "Photodiode",
+  "classification": "Photodiode",
+  "description": "Reverse-biased photodiode across a load — output rises linearly and fast with light",
+  "protocol": "ANALOG",
+
+  "pins": {
+    "1": {"type": "terminal", "note": "Top terminal (to supply rail)"},
+    "2": {"type": "terminal", "note": "Output across load (to ADC)"}
+  },
+
+  "responsivity": 1.0,
+
+  "simulation_model": "parts.photodiode.model.PhotodiodeNode"
+}

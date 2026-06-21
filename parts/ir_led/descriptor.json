@@ -1,0 +1,18 @@
+{
+  "part": "LED_IR",
+  "classification": "LED",
+  "description": "Infrared emitter LED — forward-biased current sets IR output intensity",
+  "protocol": "GPIO",
+
+  "pins": {
+    "A": {"type": "anode",   "note": "Anode (+)"},
+    "K": {"type": "cathode", "note": "Cathode (−)"}
+  },
+
+  "vf":         1.2,
+  "if_ma":      50,
+  "series_r":   220,
+  "wavelength": 940,
+
+  "simulation_model": "parts.ir_led.model.IRLedNode"
+}

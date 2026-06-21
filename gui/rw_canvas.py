@@ -17,10 +17,13 @@ Architecture
 """
 
 from __future__ import annotations
+import math
 from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout,
     QGraphicsScene, QGraphicsView, QGraphicsItem,
-    QGraphicsEllipseItem, QGraphicsPathItem, QLabel,
+    QGraphicsEllipseItem, QGraphicsPathItem, QLabel, QInputDialog,
+    QPushButton, QMenu, QGraphicsProxyWidget,
+    QComboBox, QDoubleSpinBox, QSpinBox,
 )
 from PyQt6.QtGui import (
     QPainter, QColor, QPen, QBrush, QPainterPath,
@@ -31,6 +34,7 @@ from PyQt6.QtCore import (
 )
 
 from core.rw_bus import RWBus
+from core.fidelity import CONFIG
 
 # ── Solarized Light palette ───────────────────────────────────────────────────
 
@@ -59,6 +63,28 @@ _WIRE_CLR   = {
 }
 _PORT_R     = 6
 _PORT_HOVER = QColor("#CB4B16")
+
+# LED colour → dominant wavelength (nm)
+_COLOR_WAVELENGTH = {
+    "red":    625,
+    "orange": 605,
+    "yellow": 590,
+    "green":  525,
+    "blue":   470,
+    "white":  580,   # broadband — use a nominal centre
+}
+
+# embedded-control stylesheet (Solarized Light)
+_CTRL_CSS = (
+    "QComboBox, QDoubleSpinBox, QSpinBox {"
+    "  background:#FDF6E3; color:#586E75;"
+    "  border:1px solid #93A1A1; border-radius:3px;"
+    "  padding:1px 4px; font-size:10px; }"
+    "QComboBox:hover, QDoubleSpinBox:hover, QSpinBox:hover { border-color:#CB4B16; }"
+    "QComboBox QAbstractItemView {"
+    "  background:#FDF6E3; color:#586E75; selection-background-color:#EEE8D5;"
+    "  selection-color:#CB4B16; }"
+)
 
 
 # ── port ──────────────────────────────────────────────────────────────────────
@@ -220,11 +246,12 @@ class _BaseNode(QGraphicsItem):
 class _LEDNode(_BaseNode):
     _LED_R = 34
 
-    def __init__(self, ref: str, color: str = "#ff2020"):
+    def __init__(self, ref: str, color: str = "#ff2020", wavelength: int = 625):
         super().__init__(ref, "LED")
         self._on         = False
         self._brightness = 0.0
         self._led_color  = QColor(color)
+        self.wavelength  = wavelength      # nm — emitted light colour
 
         self._port_light = self._add_port("light", "output", "Light")
 
@@ -324,7 +351,15 @@ class _LDRNode(_BaseNode):
     def __init__(self, ref: str):
         super().__init__(ref, "PHOTORESISTOR")
 
+        self._reading: int   = 0       # latest ADC value 0..4095
+        self._light:   float = 0.0     # latest illumination 0..1
+
         self._port_light = self._add_port("light", "input", "Light")
+
+    def update_reading(self, adc_value: int, light: float = 0.0):
+        self._reading = int(adc_value)
+        self._light   = max(0.0, min(1.0, float(light)))
+        self.update()
 
     def paint(self, painter: QPainter, option, widget):
         super().paint(painter, option, widget)
@@ -372,6 +407,17 @@ class _LDRNode(_BaseNode):
         painter.setPen(_TEXT_SEC)
         painter.drawText(QRectF(8, H / 2 - 18, 50, 14),
                          Qt.AlignmentFlag.AlignLeft, "LIGHT IN")
+
+        # ── ADC reading pill (bottom) ─────────────────────────────────────────
+        pill_rect = QRectF(W / 2 - 42, H - 30, 84, 18)
+        painter.setBrush(QBrush(QColor("#FDF6E3")))
+        bdr = QColor(_ACCENT); bdr.setAlpha(110)
+        painter.setPen(QPen(bdr, 0.5))
+        painter.drawRoundedRect(pill_rect, 9, 9)
+        f_val = QFont("Menlo,Consolas,Courier New,monospace", 8, QFont.Weight.Bold)
+        painter.setFont(f_val)
+        painter.setPen(_ACCENT)
+        painter.drawText(pill_rect, Qt.AlignmentFlag.AlignCenter, f"ADC {self._reading}")
 
 
 # ── button cap (child item, handles its own mouse events) ────────────────────
@@ -520,16 +566,159 @@ class _ButtonNode(_BaseNode):
                          state_txt)
 
 
+# ── potentiometer slider (child item, handles its own mouse drag) ────────────
+
+class _PotSlider(QGraphicsItem):
+    """
+    Horizontal slider track + handle.  Dragging the handle reports a fraction
+    0.0–1.0 via on_change.  Lives as a child of _PotNode so the parent stays
+    draggable everywhere except on the track.
+    """
+    _TRACK_W = 96
+    _H       = 30
+
+    def __init__(self, parent: QGraphicsItem, on_change):
+        super().__init__(parent)
+        self._on_change = on_change
+        self._frac      = 0.5
+        self.setAcceptedMouseButtons(Qt.MouseButton.LeftButton)
+        self.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.setZValue(5)
+
+    def boundingRect(self) -> QRectF:
+        return QRectF(-self._TRACK_W / 2 - 8, -self._H / 2, self._TRACK_W + 16, self._H)
+
+    def set_frac(self, frac: float):
+        self._frac = max(0.0, min(1.0, frac))
+        self.update()
+
+    def paint(self, painter: QPainter, option, widget):
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        w = self._TRACK_W
+        x0 = -w / 2
+
+        # track
+        painter.setPen(Qt.PenStyle.NoPen)
+        painter.setBrush(QBrush(QColor("#D7CFB8")))
+        painter.drawRoundedRect(QRectF(x0, -3, w, 6), 3, 3)
+        # filled portion
+        painter.setBrush(QBrush(_ACCENT))
+        painter.drawRoundedRect(QRectF(x0, -3, w * self._frac, 6), 3, 3)
+
+        # handle
+        hx = x0 + w * self._frac
+        painter.setBrush(QBrush(QColor("#FDF6E3")))
+        painter.setPen(QPen(_ACCENT, 2))
+        painter.drawEllipse(QPointF(hx, 0), 9, 9)
+
+    def _update_from_x(self, x: float):
+        w = self._TRACK_W
+        frac = (x + w / 2) / w
+        self.set_frac(frac)
+        self._on_change(self._frac)
+
+    def mousePressEvent(self, ev):
+        self._update_from_x(ev.pos().x())
+        ev.accept()
+
+    def mouseMoveEvent(self, ev):
+        self._update_from_x(ev.pos().x())
+        ev.accept()
+
+    def mouseReleaseEvent(self, ev):
+        ev.accept()
+
+
+# ── potentiometer node ────────────────────────────────────────────────────────
+
+class _PotNode(_BaseNode):
+    _H = 150
+
+    def __init__(self, ref: str, position: float = 0.5):
+        super().__init__(ref, "POTENTIOMETER")
+        self._position = max(0.0, min(1.0, position))
+        self._model    = None       # PotentiometerNode set after sim starts
+
+        self._slider = _PotSlider(self, self._on_slider)
+        self._slider.setPos(self._W / 2, self._H - 30)
+        self._slider.set_frac(self._position)
+
+    # ── model binding (main thread, after node_ready) ─────────────────────────
+
+    def bind_model(self, model):
+        self._model = model
+        if hasattr(model, "set_position"):
+            model.set_position(self._position)
+
+    def _on_slider(self, frac: float):
+        self._position = frac
+        if self._model is not None and hasattr(self._model, "set_position"):
+            self._model.set_position(frac)
+        self.update()
+
+    # ── paint ─────────────────────────────────────────────────────────────────
+
+    def paint(self, painter: QPainter, option, widget):
+        super().paint(painter, option, widget)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        W, H = self._W, self._H
+
+        # ref label
+        f_ref = QFont("Menlo,Consolas,Courier New,monospace", 8, QFont.Weight.Bold)
+        painter.setFont(f_ref)
+        painter.setPen(_TEXT_PRI)
+        painter.drawText(QRectF(12, 14, W - 52, 14), Qt.AlignmentFlag.AlignLeft, self.ref)
+
+        # type badge
+        badge_rect = QRectF(W - 40, 13, 28, 14)
+        painter.setBrush(QBrush(QColor("#FDF6E3")))
+        bdr = QColor(_ACCENT); bdr.setAlpha(160)
+        painter.setPen(QPen(bdr, 0.5))
+        painter.drawRoundedRect(badge_rect, 6, 6)
+        f_b = QFont("SF Pro Text,Helvetica,Arial,sans-serif", 7, QFont.Weight.Bold)
+        painter.setFont(f_b)
+        painter.setPen(_ACCENT)
+        painter.drawText(badge_rect, Qt.AlignmentFlag.AlignCenter, "POT")
+
+        # big percentage
+        f_big = QFont("SF Pro Text,Helvetica,Arial,sans-serif", 24, QFont.Weight.Bold)
+        painter.setFont(f_big)
+        painter.setPen(_TEXT_PRI)
+        painter.drawText(QRectF(0, 44, W, 36), Qt.AlignmentFlag.AlignCenter,
+                         f"{int(self._position * 100)}%")
+
+        # sub-label
+        f_sub = QFont("SF Pro Text,Helvetica,Arial,sans-serif", 7)
+        painter.setFont(f_sub)
+        painter.setPen(_TEXT_SEC)
+        painter.drawText(QRectF(0, 80, W, 12), Qt.AlignmentFlag.AlignCenter, "WIPER")
+
+
 # ── loss / attenuator node ────────────────────────────────────────────────────
 
 class _LossNode(_BaseNode):
-    _H = 155
+    _W = 168
+    _H = 262
+
+    # mode label → rw signal type ; modes that carry a wavelength field
+    _MODES = {
+        "Single Light": "light",
+        "Infrared":     "ir",
+        "Heat":         "heat",
+        "Sound":        "sound",
+    }
+    _LIGHT_MODES = {"Single Light", "Infrared"}
 
     def __init__(self, ref: str, loss_pct: float = 30.0,
                  signal_type: str = "light"):
         super().__init__(ref, "LOSS")
         self._loss_pct    = max(0.0, min(100.0, loss_pct))
         self._signal_type = signal_type
+        self._mode        = next((m for m, s in self._MODES.items()
+                                  if s == signal_type), "Single Light")
+        self._wavelength  = 625      # nm — band centre, defaults to red
+        self._margin      = 20       # nm — half-width of the affected band
+        self._tapering    = 50.0     # %  — edge falloff within the band
         self._in_val:  float = 0.0
         self._out_val: float = 0.0
         self._press_pos    = QPointF(0.0, 0.0)
@@ -537,14 +726,128 @@ class _LossNode(_BaseNode):
         self._port_in  = self._add_port(signal_type, "input",  "In")
         self._port_out = self._add_port(signal_type, "output", "Out")
 
+        self._build_controls(loss_pct)
+
+    # ── embedded live controls ────────────────────────────────────────────────
+
+    def _build_controls(self, loss_pct: float):
+        W = self._W
+
+        self._combo = QComboBox()
+        self._combo.addItems(list(self._MODES.keys()))
+        self._combo.setCurrentText(self._mode)
+        self._combo.setStyleSheet(_CTRL_CSS)
+        self._combo.currentTextChanged.connect(self._on_mode)
+        self._p_combo = QGraphicsProxyWidget(self)
+        self._p_combo.setWidget(self._combo)
+        self._p_combo.setGeometry(QRectF(12, 34, W - 24, 22))
+
+        self._loss_spin = QDoubleSpinBox()
+        self._loss_spin.setRange(0.0, 100.0)
+        self._loss_spin.setDecimals(0)
+        self._loss_spin.setSuffix("  % loss")
+        self._loss_spin.setValue(loss_pct)
+        self._loss_spin.setStyleSheet(_CTRL_CSS)
+        self._loss_spin.valueChanged.connect(self._on_loss)
+        self._p_loss = QGraphicsProxyWidget(self)
+        self._p_loss.setWidget(self._loss_spin)
+        self._p_loss.setGeometry(QRectF(12, 62, W - 24, 22))
+
+        self._wl_spin = QSpinBox()
+        self._wl_spin.setRange(380, 750)
+        self._wl_spin.setSingleStep(5)
+        self._wl_spin.setPrefix("λ ")
+        self._wl_spin.setSuffix("  nm")
+        self._wl_spin.setValue(self._wavelength)
+        self._wl_spin.setStyleSheet(_CTRL_CSS)
+        self._wl_spin.valueChanged.connect(self._on_wavelength)
+        self._p_wl = QGraphicsProxyWidget(self)
+        self._p_wl.setWidget(self._wl_spin)
+        self._p_wl.setGeometry(QRectF(12, 90, W - 24, 22))
+
+        self._margin_spin = QSpinBox()
+        self._margin_spin.setRange(0, 200)
+        self._margin_spin.setSingleStep(5)
+        self._margin_spin.setPrefix("± ")
+        self._margin_spin.setSuffix("  nm")
+        self._margin_spin.setValue(self._margin)
+        self._margin_spin.setStyleSheet(_CTRL_CSS)
+        self._margin_spin.valueChanged.connect(self._on_margin)
+        self._p_margin = QGraphicsProxyWidget(self)
+        self._p_margin.setWidget(self._margin_spin)
+        self._p_margin.setGeometry(QRectF(12, 118, W - 24, 22))
+
+        self._taper_spin = QDoubleSpinBox()
+        self._taper_spin.setRange(0.0, 100.0)
+        self._taper_spin.setDecimals(0)
+        self._taper_spin.setSuffix("  % taper")
+        self._taper_spin.setValue(self._tapering)
+        self._taper_spin.setStyleSheet(_CTRL_CSS)
+        self._taper_spin.valueChanged.connect(self._on_taper)
+        self._p_taper = QGraphicsProxyWidget(self)
+        self._p_taper.setWidget(self._taper_spin)
+        self._p_taper.setGeometry(QRectF(12, 146, W - 24, 22))
+
+        self._set_light_fields(self._mode in self._LIGHT_MODES)
+
+    def _set_light_fields(self, visible: bool):
+        for p in (self._p_wl, self._p_margin, self._p_taper):
+            p.setVisible(visible)
+
     @property
     def attenuation(self) -> float:
         return 1.0 - self._loss_pct / 100.0
+
+    @property
+    def wavelength(self) -> int:
+        return self._wavelength
+
+    @property
+    def margin(self) -> int:
+        return self._margin
+
+    @property
+    def tapering(self) -> float:
+        return self._tapering
 
     def update_state(self, in_val: float, out_val: float):
         self._in_val  = in_val
         self._out_val = out_val
         self.update()
+
+    # ── control handlers ──────────────────────────────────────────────────────
+
+    def _emit_changed(self):
+        sc = self.scene()
+        if sc is not None:
+            sc.loss_node_changed.emit(self.ref)
+
+    def _on_mode(self, text: str):
+        self._mode        = text
+        self._signal_type = self._MODES.get(text, "light")
+        self._set_light_fields(text in self._LIGHT_MODES)
+        self.update()
+        self._emit_changed()
+
+    def _on_loss(self, val: float):
+        self._loss_pct = val
+        self.update()
+        self._emit_changed()
+
+    def _on_wavelength(self, val: int):
+        self._wavelength = val
+        self.update()
+        self._emit_changed()
+
+    def _on_margin(self, val: int):
+        self._margin = val
+        self.update()
+        self._emit_changed()
+
+    def _on_taper(self, val: float):
+        self._tapering = val
+        self.update()
+        self._emit_changed()
 
     # ── wire-splice on drag-release ───────────────────────────────────────────
 
@@ -587,48 +890,36 @@ class _LossNode(_BaseNode):
         # type badge
         badge_rect = QRectF(W - 40, 13, 28, 14)
         painter.setBrush(QBrush(QColor("#FDF6E3")))
-        bdr = QColor(_TEXT_SEC); bdr.setAlpha(100)
+        bdr = QColor(_ACCENT); bdr.setAlpha(160)
         painter.setPen(QPen(bdr, 0.5))
         painter.drawRoundedRect(badge_rect, 6, 6)
         f_b = QFont("SF Pro Text,Helvetica,Arial,sans-serif", 7, QFont.Weight.Bold)
         painter.setFont(f_b)
-        painter.setPen(_TEXT_SEC)
+        painter.setPen(_ACCENT)
         painter.drawText(badge_rect, Qt.AlignmentFlag.AlignCenter, "LOSS")
 
-        # big loss percentage
-        f_big = QFont("SF Pro Text,Helvetica,Arial,sans-serif", 24, QFont.Weight.Bold)
-        painter.setFont(f_big)
-        painter.setPen(_ACCENT)
-        painter.drawText(QRectF(0, 36, W, 36), Qt.AlignmentFlag.AlignCenter,
-                         f"{int(self._loss_pct)}%")
+        # (mode / loss / wavelength controls are embedded proxy widgets, y≈34..112)
 
-        # signal type sub-label
-        f_sub = QFont("SF Pro Text,Helvetica,Arial,sans-serif", 8)
-        painter.setFont(f_sub)
-        painter.setPen(_TEXT_SEC)
-        painter.drawText(QRectF(0, 76, W, 14), Qt.AlignmentFlag.AlignCenter,
-                         self._signal_type.upper() + " ATTENUATION")
-
-        # live in → out values (shown once data flows)
+        # live in → out values (shown once data flows), else splice hint
         if self._in_val > 0.001 or self._out_val > 0.001:
-            f_val = QFont("Menlo,Consolas,Courier New,monospace", 8)
+            f_val = QFont("Menlo,Consolas,Courier New,monospace", 9, QFont.Weight.Bold)
             painter.setFont(f_val)
             painter.setPen(_TEXT_PRI)
-            painter.drawText(QRectF(0, 95, W, 14), Qt.AlignmentFlag.AlignCenter,
+            painter.drawText(QRectF(0, H - 46, W, 16), Qt.AlignmentFlag.AlignCenter,
                              f"{self._in_val:.2f} → {self._out_val:.2f}")
         else:
             f_hint = QFont("SF Pro Text,Helvetica,Arial,sans-serif", 7)
             painter.setFont(f_hint)
             painter.setPen(_TEXT_SEC)
-            painter.drawText(QRectF(0, 95, W, 14), Qt.AlignmentFlag.AlignCenter,
+            painter.drawText(QRectF(0, H - 44, W, 14), Qt.AlignmentFlag.AlignCenter,
                              "drop onto a wire to splice")
 
-        # left / right port labels
+        # left / right port labels (just above bottom edge)
         f_port = QFont("SF Pro Text,Helvetica,Arial,sans-serif", 7)
         painter.setFont(f_port)
         painter.setPen(_TEXT_SEC)
-        painter.drawText(QRectF(8,     H / 2 - 18, 36, 12), Qt.AlignmentFlag.AlignLeft,  "IN")
-        painter.drawText(QRectF(W - 44, H / 2 - 18, 36, 12), Qt.AlignmentFlag.AlignRight, "OUT")
+        painter.drawText(QRectF(8,      H - 26, 36, 12), Qt.AlignmentFlag.AlignLeft,  "IN")
+        painter.drawText(QRectF(W - 44, H - 26, 36, 12), Qt.AlignmentFlag.AlignRight, "OUT")
 
 
 # ── scene (handles port-drag wiring) ─────────────────────────────────────────
@@ -636,6 +927,7 @@ class _LossNode(_BaseNode):
 class _RWScene(QGraphicsScene):
     connection_made    = pyqtSignal(str, str, str)   # src_id, dst_id, rw_type
     connection_removed = pyqtSignal(str, str)         # src_id, dst_id
+    loss_node_changed  = pyqtSignal(str)              # ref — params changed, recompute
 
     def __init__(self):
         super().__init__()
@@ -648,7 +940,19 @@ class _RWScene(QGraphicsScene):
                 return item
         return None
 
+    def _wire_at(self, pos: QPointF) -> "_Wire | None":
+        for item in self.items(pos, Qt.ItemSelectionMode.IntersectsItemShape):
+            if isinstance(item, _Wire):
+                return item
+        return None
+
     def mousePressEvent(self, ev):
+        if ev.button() == Qt.MouseButton.RightButton:
+            wire = self._wire_at(ev.scenePos())
+            if wire:
+                self.remove_wire(wire)
+                ev.accept()
+                return
         if ev.button() == Qt.MouseButton.LeftButton:
             port = self._port_at(ev.scenePos())
             if port:
@@ -762,12 +1066,16 @@ class _RWView(QGraphicsView):
         self.scale(factor, factor)
 
     def mousePressEvent(self, ev):
-        # don't start pan-drag when clicking on a port or node
-        item = self.itemAt(ev.pos())
-        if isinstance(item, (_Port, _BaseNode)):
+        # right-click → wire deletion; don't start a pan
+        if ev.button() == Qt.MouseButton.RightButton:
             self.setDragMode(QGraphicsView.DragMode.NoDrag)
         else:
-            self.setDragMode(QGraphicsView.DragMode.ScrollHandDrag)
+            item = self.itemAt(ev.pos())
+            # don't pan when pressing a node, port, or an embedded control widget
+            if isinstance(item, (_Port, _BaseNode, QGraphicsProxyWidget)):
+                self.setDragMode(QGraphicsView.DragMode.NoDrag)
+            else:
+                self.setDragMode(QGraphicsView.DragMode.ScrollHandDrag)
         super().mousePressEvent(ev)
 
     def mouseReleaseEvent(self, ev):
@@ -790,10 +1098,15 @@ class RWCanvas(QWidget):
     rw_bus                  → the RWBus instance (read by sim for LDR values etc.)
     """
 
+    # ref, propagated light 0..1, source wavelength nm (0=unknown) — pushed to
+    # the sim so loss nodes attenuate, and the LDR can apply spectral response
+    ldr_light_changed = pyqtSignal(str, float, int)
+
     def __init__(self, parent=None):
         super().__init__(parent)
-        self.rw_bus = RWBus()
-        self._nodes: dict[str, _BaseNode] = {}
+        self.rw_bus   = RWBus()
+        self._nodes:      dict[str, _BaseNode]  = {}
+        self._wire_state: list[tuple[str, str]] = []   # (src_port_id, dst_port_id)
         self._build()
 
     def _build(self):
@@ -811,20 +1124,45 @@ class RWCanvas(QWidget):
         title = QLabel("Real World")
         title.setStyleSheet("color:#657B83; font-size:11px;")
         hbox.addWidget(title)
+        hbox.addStretch()
+
+        # ── Add ▾ dropdown — choose a node type to drop on the canvas ──────────
+        self._add_btn = QPushButton("+ Add  ▾")
+        self._add_btn.setFixedHeight(22)
+        self._add_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._add_btn.setStyleSheet(
+            "QPushButton { background:#FDF6E3; color:#586E75; border:1px solid #93A1A1;"
+            " border-radius:4px; padding:0 10px; font-size:11px; }"
+            "QPushButton:hover { background:#EEE8D5; border-color:#CB4B16; color:#CB4B16; }"
+            "QPushButton::menu-indicator { width:0px; }"
+        )
+        add_menu = QMenu(self._add_btn)
+        add_menu.setStyleSheet(
+            "QMenu { background:#FDF6E3; color:#586E75; border:1px solid #93A1A1; }"
+            "QMenu::item:selected { background:#EEE8D5; color:#CB4B16; }"
+        )
+        # node types — extend this list as new RW nodes are added
+        for label, factory in (("Loss node", self._add_loss_interactive),):
+            act = add_menu.addAction(label)
+            act.triggered.connect(factory)
+        self._add_btn.setMenu(add_menu)
+        hbox.addWidget(self._add_btn)
         layout.addWidget(header)
 
         self._scene = _RWScene()
         self._scene.setSceneRect(-2000, -2000, 4000, 4000)
         self._scene.connection_made.connect(self._on_connection)
         self._scene.connection_removed.connect(self._on_disconnection)
+        self._scene.loss_node_changed.connect(self._on_loss_changed)
         self._view = _RWView(self._scene)
         layout.addWidget(self._view)
 
     # ── node addition ─────────────────────────────────────────────────────────
 
     def add_led(self, ref: str, color: str = "#ff2020",
-                pos: tuple[float, float] = (0, 0)) -> _LEDNode:
-        node = _LEDNode(ref, color)
+                pos: tuple[float, float] = (0, 0),
+                wavelength: int = 625) -> _LEDNode:
+        node = _LEDNode(ref, color, wavelength)
         node.setPos(*pos)
         self._scene.addItem(node)
         self._nodes[ref] = node
@@ -846,9 +1184,25 @@ class RWCanvas(QWidget):
         self._nodes[ref] = node
         return node
 
+    def add_pot(self, ref: str, position: float = 0.5,
+                pos: tuple[float, float] = (0, 0)) -> _PotNode:
+        node = _PotNode(ref, position)
+        node.setPos(*pos)
+        self._scene.addItem(node)
+        self._nodes[ref] = node
+        return node
+
     def get_led(self, ref: str) -> _LEDNode | None:
         n = self._nodes.get(ref)
         return n if isinstance(n, _LEDNode) else None
+
+    def get_pot(self, ref: str) -> _PotNode | None:
+        n = self._nodes.get(ref)
+        return n if isinstance(n, _PotNode) else None
+
+    def get_ldr(self, ref: str) -> _LDRNode | None:
+        n = self._nodes.get(ref)
+        return n if isinstance(n, _LDRNode) else None
 
     def get_button(self, ref: str) -> _ButtonNode | None:
         n = self._nodes.get(ref)
@@ -861,17 +1215,30 @@ class RWCanvas(QWidget):
         node.setPos(*pos)
         self._scene.addItem(node)
         self._nodes[ref] = node
-        # register the internal attenuating connection
+        # register the internal attenuating connection (spectral fit applied
+        # once it gets wired to a source)
         self.rw_bus.connect(
             f"{ref}:{signal_type}_in",
             f"{ref}:{signal_type}_out",
             loss=node.attenuation,
         )
+        self._update_loss_coupling(ref)
         return node
 
     def get_loss_node(self, ref: str) -> _LossNode | None:
         n = self._nodes.get(ref)
         return n if isinstance(n, _LossNode) else None
+
+    def _add_loss_interactive(self):
+        """Add a loss node from the toolbar dropdown at the current view centre."""
+        n = 1
+        while f"LOSS{n}" in self._nodes:
+            n += 1
+        ref = f"LOSS{n}"
+        center = self._view.mapToScene(self._view.viewport().rect().center())
+        node = self.add_loss_node(ref, loss_pct=30.0, signal_type="light",
+                                  pos=(center.x() - 65, center.y() - 77))
+        node.setSelected(True)
 
     # ── sim update ────────────────────────────────────────────────────────────
 
@@ -886,26 +1253,65 @@ class RWCanvas(QWidget):
 
     # ── circuit auto-population ───────────────────────────────────────────────
 
+    def _find_port_by_id(self, port_id: str) -> "_Port | None":
+        for node in self._nodes.values():
+            for p in node.ports():
+                if p.port_id == port_id:
+                    return p
+        return None
+
+    def _restore_wires(self, wires: list[tuple[str, str]]):
+        """Re-draw and re-register saved user wires after a circuit reload."""
+        for src_id, dst_id in wires:
+            src = self._find_port_by_id(src_id)
+            dst = self._find_port_by_id(dst_id)
+            if src is None or dst is None:
+                continue
+            wire = _Wire(src, dst)
+            self._scene.addItem(wire)
+            src.add_wire(wire)
+            dst.add_wire(wire)
+            self.rw_bus.connect(src_id, dst_id)
+            if (src_id, dst_id) not in self._wire_state:
+                self._wire_state.append((src_id, dst_id))
+        self._refresh_loss_couplings()
+
     def load_circuit(self, circuit: dict):
         """
         Auto-populate RW canvas from a circuit dict.
         Creates visual nodes for every LED and button part found.
         Existing nodes are cleared first.
         """
+        # save user-drawn wires so they can be restored after reload
+        saved_wires = list(self._wire_state)
+
+        # remove all wire graphics items first (they reference nodes we're about to delete)
+        for item in list(self._scene.items()):
+            if isinstance(item, _Wire):
+                item.src.remove_wire(item)
+                item.dst.remove_wire(item)
+                self._scene.removeItem(item)
+        self._wire_state = []
+
         # clear existing visual nodes
         for ref in list(self._nodes.keys()):
             item = self._nodes.pop(ref)
             if self._scene:
                 self._scene.removeItem(item)
 
+        # reset bus — node recreation below will re-register internal connections
+        self.rw_bus.clear()
+
         _LED_TYPES  = {"led", "Device:LED", "Device:LED_ALT"}
         _BTN_TYPES  = {"button", "Device:SW_Push", "Device:SW_Push_Virtual"}
         _LDR_TYPES  = {"ldr", "photoresistor", "Device:R_Photo"}
+        _POT_TYPES  = {"pot", "potentiometer", "Device:R_Potentiometer"}
         _LOSS_TYPES = {"loss", "attenuator", "Device:Loss"}
 
         led_col  = 0
         btn_col  = 0
         ldr_col  = 0
+        pot_col  = 0
         loss_col = 0
 
         for ref, part_def in circuit.get("parts", {}).items():
@@ -917,7 +1323,9 @@ class RWCanvas(QWidget):
 
             if ptype in _LED_TYPES:
                 x = led_col * 160 - 200
-                self.add_led(ref, color=hex_color, pos=(x, -80))
+                wl = int(part_def.get("wavelength",
+                                      _COLOR_WAVELENGTH.get(color, 625)))
+                self.add_led(ref, color=hex_color, pos=(x, -80), wavelength=wl)
                 led_col += 1
 
             elif ptype in _BTN_TYPES:
@@ -930,6 +1338,12 @@ class RWCanvas(QWidget):
                 self.add_ldr(ref, pos=(x, -80))
                 ldr_col += 1
 
+            elif ptype in _POT_TYPES:
+                position = float(part_def.get("position", 0.5))
+                x = pot_col * 160 - 200
+                self.add_pot(ref, position=position, pos=(x, 140))
+                pot_col += 1
+
             elif ptype in _LOSS_TYPES:
                 loss_pct    = float(part_def.get("loss_pct", 30.0))
                 signal_type = part_def.get("signal", "light")
@@ -937,6 +1351,9 @@ class RWCanvas(QWidget):
                 self.add_loss_node(ref, loss_pct=loss_pct,
                                    signal_type=signal_type, pos=(x, 60))
                 loss_col += 1
+
+        # restore user-drawn inter-node wires
+        self._restore_wires(saved_wires)
 
         self._view.fitInView(
             self._scene.itemsBoundingRect().adjusted(-40, -40, 40, 40),
@@ -955,16 +1372,107 @@ class RWCanvas(QWidget):
         if btn_node is not None:
             btn_node.bind_model(node)
 
+        pot_node = self.get_pot(ref)
+        if pot_node is not None:
+            pot_node.bind_model(node)
+
+    def update_sensor(self, ref: str, adc_value: int, light: float = 0.0):
+        """Called by SimWorker to refresh a photoresistor's ADC reading display."""
+        ldr_node = self.get_ldr(ref)
+        if ldr_node is not None:
+            ldr_node.update_reading(adc_value, light)
+
     # ── connection handlers ───────────────────────────────────────────────────
 
     def _on_connection(self, src_id: str, dst_id: str, rw_type: str):
         self.rw_bus.connect(src_id, dst_id)
+        if (src_id, dst_id) not in self._wire_state:
+            self._wire_state.append((src_id, dst_id))
+        self._refresh_loss_couplings()   # a loss node may now have a source λ
 
     def _on_disconnection(self, src_id: str, dst_id: str):
         self.rw_bus.disconnect(src_id, dst_id)
+        self._wire_state = [(s, d) for s, d in self._wire_state
+                            if not (s == src_id and d == dst_id)]
+        self._refresh_loss_couplings()
+
+    def _on_loss_changed(self, ref: str):
+        """A loss node's mode / loss / wavelength changed — recompute its coupling."""
+        self._update_loss_coupling(ref)
+
+    # ── loss-node spectral coupling ────────────────────────────────────────────
+
+    def _trace_source_wavelength(self, dst_port_id: str, depth: int = 0) -> int | None:
+        """
+        Walk the light wiring backwards from a port to the emitting LED's
+        wavelength.  Loss nodes attenuate intensity but don't shift colour, so
+        we pass through them to their input.
+        """
+        if depth > 8:
+            return None
+        for c in self.rw_bus.connections():
+            if c.dst == dst_port_id:
+                src_ref = c.src.split(":")[0]
+                n = self._nodes.get(src_ref)
+                if isinstance(n, _LEDNode):
+                    return n.wavelength
+                if isinstance(n, _LossNode):
+                    return self._trace_source_wavelength(f"{src_ref}:light_in", depth + 1)
+        return None
+
+    def _source_wavelength_for(self, ref: str) -> int | None:
+        """Wavelength of the light reaching this loss node's input."""
+        return self._trace_source_wavelength(f"{ref}:light_in")
+
+    def _update_loss_coupling(self, ref: str):
+        """
+        Re-register a loss node's internal pass-through fraction.
+
+        For light/ir modes the loss only applies to source wavelengths inside
+        the band [λ ± margin], shaped by tapering:
+            weight(d) = (1−taper) + taper · ½(1+cos(π·d/margin))   for d < margin
+                      = 0                                          for d ≥ margin
+            loss_applied = loss% · weight     pass = 1 − loss_applied
+        weight is 1 at the band centre and falls to (1−taper) at the edge, so
+        the centre wavelength loses the most and the edges only slightly.
+        """
+        node = self.get_loss_node(ref)
+        if node is None:
+            return
+        sig = node._signal_type
+        loss_frac = node._loss_pct / 100.0
+
+        # ADVANCED real-world: apply the spectral band (λ / margin / taper).
+        # BASIC: flat loss%, wavelength ignored.
+        if sig in ("light", "ir") and CONFIG.is_advanced("real_world"):
+            src_wl = self._source_wavelength_for(ref)
+            if src_wl is not None:
+                d      = abs(src_wl - node.wavelength)
+                margin = max(1, node.margin)
+                if d >= margin:
+                    weight = 0.0
+                else:
+                    taper    = max(0.0, min(1.0, node.tapering / 100.0))
+                    cos_fall = 0.5 * (1.0 + math.cos(math.pi * d / margin))
+                    weight   = (1.0 - taper) + taper * cos_fall
+                loss_frac *= weight
+
+        eff = max(0.0, min(1.0, 1.0 - loss_frac))
+        self.rw_bus.disconnect(f"{ref}:{sig}_in", f"{ref}:{sig}_out")
+        self.rw_bus.connect(f"{ref}:{sig}_in", f"{ref}:{sig}_out", loss=eff)
+
+    def _refresh_loss_couplings(self):
+        for ref, node in self._nodes.items():
+            if isinstance(node, _LossNode):
+                self._update_loss_coupling(ref)
+
+    def refresh_fidelity(self):
+        """Re-apply loss couplings after a fidelity tier change (basic↔advanced)."""
+        self._refresh_loss_couplings()
 
     def _refresh_rw_nodes(self):
-        """Update loss node live-value displays after each bus tick."""
+        """Update loss node live-value displays and push wired LDR light to the sim."""
+        conns = self.rw_bus.connections()
         for ref, node in self._nodes.items():
             if isinstance(node, _LossNode):
                 sig = node._signal_type
@@ -972,4 +1480,13 @@ class RWCanvas(QWidget):
                     self.rw_bus.get(f"{ref}:{sig}_in"),
                     self.rw_bus.get(f"{ref}:{sig}_out"),
                 )
+            elif isinstance(node, _LDRNode):
+                # When a light wire feeds this LDR (optionally through a loss
+                # node), push the propagated value + source wavelength to the
+                # sim so the loss attenuates and the LDR can apply its spectral
+                # response.
+                port_id = f"{ref}:light"
+                if any(c.dst == port_id for c in conns):
+                    wl = self._trace_source_wavelength(port_id) or 0
+                    self.ldr_light_changed.emit(ref, self.rw_bus.get(port_id), wl)
 

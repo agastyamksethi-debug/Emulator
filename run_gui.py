@@ -15,6 +15,12 @@ import os
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
+# Stabilise the embedded Chromium (Monaco editor) renderer on macOS — the GPU
+# compositor can segfault (QtWebEngineCore EXC_BAD_ACCESS).  Must be set before
+# QtWebEngine is imported.  Override by exporting QTWEBENGINE_CHROMIUM_FLAGS.
+os.environ.setdefault("QTWEBENGINE_CHROMIUM_FLAGS",
+                      "--disable-gpu --disable-gpu-compositing")
+
 from PyQt6.QtWidgets import QApplication
 from gui.main_window import MainWindow
 
@@ -36,7 +42,31 @@ def _parse_args():
     return sketch, circuit
 
 
+def _install_excepthook():
+    """Log uncaught exceptions (incl. those raised inside Qt slots) to a file.
+
+    PyQt6 aborts the process when a slot raises; capturing the traceback here
+    makes those crashes diagnosable instead of a silent quit.
+    """
+    import traceback, datetime
+    log_path = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                            "crash.log")
+
+    def hook(exc_type, exc, tb):
+        msg = "".join(traceback.format_exception(exc_type, exc, tb))
+        stamp = datetime.datetime.now().isoformat(timespec="seconds")
+        try:
+            with open(log_path, "a") as f:
+                f.write(f"\n===== {stamp} =====\n{msg}\n")
+        except OSError:
+            pass
+        sys.stderr.write(msg)
+
+    sys.excepthook = hook
+
+
 def main():
+    _install_excepthook()
     app = QApplication(sys.argv)
     app.setApplicationName("Emulator")
 

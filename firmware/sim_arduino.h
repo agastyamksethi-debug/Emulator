@@ -19,6 +19,8 @@
  *   MILLIS                       millis()         → <int>
  *   SER <text>                   Serial.print     → OK
  *   SERLN <text>                 Serial.println   → OK
+ *   SER_AVAIL                    Serial.available → <int>
+ *   SER_READ                     Serial.read      → <int>
  *   READY                        setup() done    (no response)
  */
 
@@ -180,8 +182,8 @@ struct _SerialClass {
     void println(unsigned long v)          { char b[32]; snprintf(b,32,"%lu",v);   _emit(b, true);  }
     void print(double v, int p = 2)        { char b[32]; snprintf(b,32,"%.*f",p,v);_emit(b, false); }
     void println(double v, int p = 2)      { char b[32]; snprintf(b,32,"%.*f",p,v);_emit(b, true);  }
-    int  available()                       { return 0; }
-    int  read()                            { return -1; }
+    int  available()                       { _sim_writeln("SER_AVAIL"); return _sim_recv_int(); }
+    int  read()                            { _sim_writeln("SER_READ");  return _sim_recv_int(); }
 };
 
 inline _SerialClass Serial;

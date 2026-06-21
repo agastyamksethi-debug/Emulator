@@ -1,0 +1,16 @@
+{
+  "part": "Microphone",
+  "classification": "SoundSensor",
+  "description": "Analog microphone / sound sensor — output swings around a mid-supply bias with sound level",
+  "protocol": "ANALOG",
+
+  "pins": {
+    "VCC": {"type": "power",      "note": "Supply"},
+    "OUT": {"type": "analog_out", "note": "Analog output (biased mid-supply)"},
+    "GND": {"type": "ground",     "note": "Ground"}
+  },
+
+  "swing": 0.9,
+
+  "simulation_model": "parts.microphone.model.MicrophoneNode"
+}

@@ -1,6 +1,7 @@
 from __future__ import annotations
 import os
 import sys
+import time
 
 from PyQt6.QtWidgets import (
     QMainWindow, QWidget, QSplitter, QVBoxLayout, QHBoxLayout,
@@ -25,6 +26,7 @@ class SimWorker(QThread):
     serial_out   = pyqtSignal(str)
     node_ready   = pyqtSignal(str, object)
     led_update   = pyqtSignal(str, bool, float)
+    sensor_update = pyqtSignal(str, int, float)   # ref, adc value, light 0..1
     time_advance = pyqtSignal(float)
     finished     = pyqtSignal()
 
@@ -33,13 +35,30 @@ class SimWorker(QThread):
         self._sketch:  str | None  = None
         self._circuit: dict | None = None
         self._stop     = False
+        self._fw       = None   # CppFirmware instance while running
+        self._runner   = None   # SimRunner instance while running
 
     def configure(self, sketch_path: str, circuit: dict):
         self._sketch  = sketch_path
         self._circuit = circuit
 
+    def push_serial_in(self, text: str):
+        """Thread-safe: inject text into the running firmware's Serial.read() buffer."""
+        if self._fw is not None:
+            self._fw.inject_serial(text)
+
+    def push_light(self, ref: str, level: float, wavelength: int = 0):
+        """Thread-safe: feed rw_bus light into a sensor node so loss nodes apply."""
+        runner = self._runner
+        if runner is not None:
+            node = runner.node(ref)
+            if node is not None and hasattr(node, "set_light"):
+                node.set_light(level, wavelength)
+
     def stop(self):
-        self._stop = True
+        self._stop   = True
+        self._fw     = None
+        self._runner = None
 
     def run(self):
         root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -74,6 +93,7 @@ class SimWorker(QThread):
                 ambient_c = 25.0,
             )
             runner._netlist = netlist
+            self._runner = runner
             runner.bus.load_netlist(netlist)
 
             for net, v in circuit.get("power", {}).items():
@@ -99,17 +119,33 @@ class SimWorker(QThread):
                 serial_cb = lambda txt: self.serial_out.emit(txt),
             )
             fw.attach(runner.bus, runner)
+            self._fw = fw
 
             self.info.emit("▶  Running …")
             fw.start()
 
             _led_prev: dict[str, tuple[bool, float]] = {}
 
+            # Pace the sim to wall-clock so it can't out-run the GUI.  Without
+            # this, runner.run() returns far faster than the simulated delay and
+            # the loop floods the monitor/plotter with output until the event
+            # queue overwhelms memory.
+            _t0 = time.monotonic()
+            _sim_s = 0.0
+
             while not self._stop:
                 delay_ms = fw._read_until_delay()
                 if delay_ms <= 0:
                     break
                 runner.run(duration_ms=delay_ms)
+
+                # real-time pacing: hold the firmware in its delay() until
+                # wall-clock catches up to simulated time
+                _sim_s += delay_ms / 1000.0
+                _lag = (_t0 + _sim_s) - time.monotonic()
+                if _lag > 0:
+                    time.sleep(min(_lag, 0.25))
+
                 fw._send("OK")
                 self.time_advance.emit(delay_ms)
 
@@ -120,8 +156,12 @@ class SimWorker(QThread):
                         if _led_prev.get(_ref) != (_on, _br):
                             _led_prev[_ref] = (_on, _br)
                             self.led_update.emit(_ref, _on, _br)
+                    elif hasattr(_node, "v_out") and hasattr(_node, "light"):
+                        _adc = max(0, min(4095, int(_node.v_out / v_sup * 4095)))
+                        self.sensor_update.emit(_ref, _adc, float(_node.light))
 
             fw.stop()
+            self._fw = None
             if not self._stop:
                 self.info.emit("■  Simulation complete")
             else:
@@ -130,6 +170,7 @@ class SimWorker(QThread):
         except Exception as exc:
             self.error.emit(str(exc))
         finally:
+            self._runner = None
             self.finished.emit()
 
 
@@ -328,7 +369,61 @@ class MainWindow(QMainWindow):
         file_menu.addAction(act_open_ino)
         file_menu.addAction(act_open_circuit)
         mb.addMenu(file_menu)
+
+        self._build_sim_menu(mb)
         self.setMenuBar(mb)
+
+    def _build_sim_menu(self, mb: QMenuBar):
+        """Simulation-fidelity config menu — choose Basic vs Advanced per domain."""
+        from core.fidelity import CONFIG, Level
+
+        sim_menu = QMenu("Simulation", mb)
+
+        self._act_rw = QAction("Real-World Physics — Advanced", self, checkable=True)
+        self._act_rw.setChecked(CONFIG.real_world == Level.ADVANCED)
+        self._act_rw.toggled.connect(
+            lambda on: self._set_fidelity("real_world", on))
+
+        self._act_adc = QAction("ADC — Advanced", self, checkable=True)
+        self._act_adc.setChecked(CONFIG.adc == Level.ADVANCED)
+        self._act_adc.toggled.connect(
+            lambda on: self._set_fidelity("adc", on))
+
+        self._act_digital = QAction("Digital — Advanced", self, checkable=True)
+        self._act_digital.setChecked(CONFIG.digital == Level.ADVANCED)
+        self._act_digital.setEnabled(False)   # digital advanced not implemented
+        self._act_digital.setToolTip("Digital logic always runs the basic model")
+
+        self._act_auto = QAction("Auto (by circuit complexity)", self, checkable=True)
+        self._act_auto.setChecked(CONFIG.auto)
+        self._act_auto.toggled.connect(self._on_auto_toggle)
+
+        sim_menu.addAction(self._act_rw)
+        sim_menu.addAction(self._act_adc)
+        sim_menu.addAction(self._act_digital)
+        sim_menu.addSeparator()
+        sim_menu.addAction(self._act_auto)
+        mb.addMenu(sim_menu)
+
+    def _set_fidelity(self, domain: str, advanced: bool):
+        from core.fidelity import CONFIG, Level
+        setattr(CONFIG, domain, Level.ADVANCED if advanced else Level.BASIC)
+        self.rw_canvas.refresh_fidelity()
+        tier = "Advanced" if advanced else "Basic"
+        self.terminal.info(f"Fidelity · {domain} → {tier}")
+
+    def _on_auto_toggle(self, on: bool):
+        from core.fidelity import CONFIG, auto_select, Level
+        CONFIG.auto = on
+        # manual toggles are disabled while auto drives the tiers
+        self._act_rw.setEnabled(not on)
+        self._act_adc.setEnabled(not on)
+        if on:
+            auto_select(self._circuit)
+            self._act_rw.setChecked(CONFIG.real_world == Level.ADVANCED)
+            self._act_adc.setChecked(CONFIG.adc == Level.ADVANCED)
+            self.rw_canvas.refresh_fidelity()
+            self.terminal.info(f"Fidelity · auto → {CONFIG}")
 
     # ── layout ────────────────────────────────────────────────────────────────
 
@@ -384,10 +479,13 @@ class MainWindow(QMainWindow):
         self._worker.serial_out.connect(self.serial.append)
         self._worker.node_ready.connect(self.rw_canvas.on_node_ready)
         self._worker.led_update.connect(self.rw_canvas.update_led)
+        self._worker.sensor_update.connect(self.rw_canvas.update_sensor)
         self._worker.time_advance.connect(self.serial.advance_time)
         self._worker.finished.connect(self._on_worker_finished)
 
-        self._worker.serial_out.connect(lambda _: self.serial.show_monitor())
+        self._worker.serial_out.connect(lambda _: self.serial.expand())
+        self.serial.send_requested.connect(self._worker.push_serial_in)
+        self.rw_canvas.ldr_light_changed.connect(self._worker.push_light)
 
         self._sb.sketch_open_req.connect(self._open_sketch)
         self._sb.monitor_toggled.connect(self._on_monitor_toggle)
@@ -418,9 +516,12 @@ class MainWindow(QMainWindow):
         self._worker.serial_out.connect(self.serial.append)
         self._worker.node_ready.connect(self.rw_canvas.on_node_ready)
         self._worker.led_update.connect(self.rw_canvas.update_led)
+        self._worker.sensor_update.connect(self.rw_canvas.update_sensor)
         self._worker.time_advance.connect(self.serial.advance_time)
         self._worker.finished.connect(self._on_worker_finished)
-        self._worker.serial_out.connect(lambda _: self.serial.show_monitor())
+        self._worker.serial_out.connect(lambda _: self.serial.expand())
+        self.serial.send_requested.connect(self._worker.push_serial_in)
+        self.rw_canvas.ldr_light_changed.connect(self._worker.push_light)
 
         self._worker.configure(sketch_path, self._circuit)
         self._worker.start()
@@ -487,7 +588,17 @@ class MainWindow(QMainWindow):
     def load_circuit(self, circuit: dict):
         self._circuit = circuit
         self.rw_canvas.load_circuit(circuit)
+        self._apply_auto_fidelity()
         self.terminal.info("Circuit received from KiCad")
+
+    def _apply_auto_fidelity(self):
+        """If auto mode is on, re-pick fidelity tiers from the loaded circuit."""
+        from core.fidelity import CONFIG, auto_select, Level
+        if CONFIG.auto:
+            auto_select(self._circuit)
+            self._act_rw.setChecked(CONFIG.real_world == Level.ADVANCED)
+            self._act_adc.setChecked(CONFIG.adc == Level.ADVANCED)
+            self.rw_canvas.refresh_fidelity()
 
     def load_sketch(self, path: str):
         self.editor.load_file(path)
@@ -500,6 +611,7 @@ class MainWindow(QMainWindow):
             with open(path) as f:
                 self._circuit = json.load(f)
             self.rw_canvas.load_circuit(self._circuit)
+            self._apply_auto_fidelity()
             self.terminal.info(f"Circuit loaded: {os.path.basename(path)}")
         except Exception as e:
             self.terminal.error(f"Circuit load failed: {e}")

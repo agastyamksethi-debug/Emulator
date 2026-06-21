@@ -1,0 +1,18 @@
+{
+  "part": "Photoresistor",
+  "classification": "Photoresistor",
+  "description": "Light-dependent resistor in a voltage divider — output voltage rises with illumination",
+  "protocol": "ANALOG",
+
+  "pins": {
+    "1": {"type": "terminal", "note": "Top terminal (to supply rail)"},
+    "2": {"type": "terminal", "note": "Divider output (to ADC pin)"}
+  },
+
+  "r_bright": 1000,
+  "r_dark":   100000,
+  "r_fixed":  10000,
+  "gain":     3.3,
+
+  "simulation_model": "parts.photoresistor.model.PhotoresistorNode"
+}

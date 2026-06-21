@@ -1,0 +1,15 @@
+{
+  "part": "Relay",
+  "classification": "Relay",
+  "description": "SPDT relay — energising the coil (IN) switches COM from NC to NO",
+  "protocol": "GPIO",
+
+  "pins": {
+    "IN":  {"type": "control", "note": "Coil drive (energise to switch)"},
+    "COM": {"type": "switched", "note": "Common contact"},
+    "NO":  {"type": "switched", "note": "Normally-open contact"},
+    "NC":  {"type": "switched", "note": "Normally-closed contact"}
+  },
+
+  "simulation_model": "parts.relay.model.RelayNode"
+}

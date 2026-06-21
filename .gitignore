@@ -28,3 +28,9 @@ Thumbs.db
 
 # Schematic uploads (user data, not tracked)
 schematic/uploads/
+
+# Compiled sketch binaries (built on demand by core.cpp_runtime)
+*_sim
+
+# Runtime crash log (written by run_gui.py excepthook)
+crash.log

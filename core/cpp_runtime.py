@@ -19,8 +19,37 @@ Usage:
 
 from __future__ import annotations
 import os
+import random
 import subprocess
+import threading
+from collections import deque
 from typing import TYPE_CHECKING
+
+from core.fidelity import CONFIG
+
+
+# ─────────────────────────────────────────────────── ADC conversion ───────────
+
+def adc_convert(voltage: float, v_supply: float, bits: int = 12) -> int:
+    """
+    Convert a net voltage to an ADC code.
+
+    BASIC     ideal linear:  code = v / v_supply · full_scale
+    ADVANCED  ESP32-like:    usable input window (~0.1–3.1 V) with saturation at
+              both ends, mild S-curve non-linearity, and a few LSB of noise.
+    """
+    full = (1 << bits) - 1
+    if not CONFIG.is_advanced("adc"):
+        return max(0, min(full, int(voltage / v_supply * full)))
+
+    # ESP32: roughly dead below ~0.1 V, saturates above ~3.1 V
+    lo, hi = 0.10, min(3.1, v_supply)
+    x = (voltage - lo) / (hi - lo)
+    x = max(0.0, min(1.0, x))
+    # mild S non-linearity (the ESP32 ADC bows away from the ideal line)
+    x = x + 0.06 * (x - 0.5) * (1.0 - abs(2.0 * x - 1.0))
+    code = x * full + random.gauss(0.0, 8.0)   # ~8 LSB RMS noise
+    return max(0, min(full, int(round(code))))
 
 if TYPE_CHECKING:
     from core.bus import SimBus
@@ -74,7 +103,7 @@ class CppFirmware:
     IPC bridge between a compiled Arduino sketch and the Python simulation bus.
 
     Protocol summary (each message is one line):
-      C++ → Python:  PM DW DR AR AW DELAY MILLIS SER SERLN READY
+      C++ → Python:  PM DW DR AR AW DELAY MILLIS SER SERLN SER_AVAIL SER_READ READY
       Python → C++:  OK  or  <integer>
     """
 
@@ -97,6 +126,15 @@ class CppFirmware:
         # LEDC channel state (populated at runtime by LEDC_SETUP / LEDC_ATTACH)
         self._ledc_resolution: dict[int, int] = {}  # channel → resolution bits
         self._ledc_pin:        dict[int, int] = {}  # channel → pin number
+        # Serial receive buffer — bytes pushed from GUI, consumed by SER_AVAIL/SER_READ
+        self._serial_in_buf:  deque[int]     = deque()
+        self._serial_in_lock: threading.Lock = threading.Lock()
+
+    def inject_serial(self, text: str):
+        """Thread-safe — push text (+ newline) into the firmware's Serial receive buffer."""
+        data = (text + "\n").encode("utf-8")
+        with self._serial_in_lock:
+            self._serial_in_buf.extend(data)
 
     def attach(self, bus, runner):
         self._bus    = bus
@@ -158,7 +196,7 @@ class CppFirmware:
             val = 0
             if net and self._bus:
                 v = self._bus.gpio.voltage(net)
-                val = max(0, min(4095, int((v / self.v_supply) * 4095)))
+                val = adc_convert(v, self.v_supply, bits=12)
             self._send(str(val))
 
         elif op == "AW":
@@ -203,6 +241,15 @@ class CppFirmware:
             if net and self._bus:
                 self._bus.gpio.release(net, "cpp_fw")
             self._send("OK")
+
+        elif op == "SER_AVAIL":
+            with self._serial_in_lock:
+                self._send(str(len(self._serial_in_buf)))
+
+        elif op == "SER_READ":
+            with self._serial_in_lock:
+                byte = self._serial_in_buf.popleft() if self._serial_in_buf else -1
+            self._send(str(byte))
 
         elif op == "MILLIS":
             t = int(self._runner.elapsed_ms) if self._runner else 0

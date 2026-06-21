@@ -13,6 +13,7 @@
   "if_ma": 20,
   "series_r": 0,
   "color": "red",
+  "wavelength": 625,
 
   "simulation_model": "parts.led.model.LEDNode"
 }

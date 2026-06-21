@@ -45,6 +45,12 @@ class LEDNode(Node):
         self._series_r:   float = float(descriptor.get("series_r", 0.0))
         self.color:       str   = descriptor.get("color", "red")
 
+        # dominant emission wavelength (nm) — explicit, else derived from colour
+        _COLOR_WL = {"red": 625, "orange": 605, "yellow": 590,
+                     "green": 525, "blue": 470, "white": 580}
+        self.wavelength: int = int(descriptor.get(
+            "wavelength", _COLOR_WL.get(self.color, 625)))
+
         self.on:             bool  = False
         self.current_ma:     float = 0.0
         self.brightness_pct: float = 0.0

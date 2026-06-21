@@ -1,0 +1,14 @@
+{
+  "part": "Hall",
+  "classification": "HallSensor",
+  "description": "Ratiometric hall-effect sensor — analog output centred at mid-supply, deflecting with magnetic field polarity/strength",
+  "protocol": "ANALOG",
+
+  "pins": {
+    "VCC": {"type": "power",      "note": "Supply"},
+    "OUT": {"type": "analog_out", "note": "Ratiometric analog output"},
+    "GND": {"type": "ground",     "note": "Ground"}
+  },
+
+  "simulation_model": "parts.hall.model.HallNode"
+}

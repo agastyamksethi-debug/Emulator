@@ -1,0 +1,16 @@
+{
+  "part": "TMP36",
+  "classification": "TemperatureSensor",
+  "description": "Analog temperature sensor — 10 mV/°C with 500 mV offset (Vout = 0.5 + 0.01·T)",
+  "protocol": "ANALOG",
+
+  "pins": {
+    "VCC": {"type": "power",      "note": "Supply"},
+    "OUT": {"type": "analog_out", "note": "Analog voltage output"},
+    "GND": {"type": "ground",     "note": "Ground"}
+  },
+
+  "temperature_c": 25.0,
+
+  "simulation_model": "parts.tmp36.model.TMP36Node"
+}

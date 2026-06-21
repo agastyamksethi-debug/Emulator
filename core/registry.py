@@ -58,6 +58,25 @@ PREFIX_CATEGORY: dict[str, Category] = {
     "S":  Category.SWITCH,
     "BT": Category.BATTERY,
     "TP": Category.TEST_POINT,
+    # Active parts that need a Node subclass.  Mapped to UNKNOWN so the prefix
+    # is NOT mistaken for a passive (R/L/C) or inert (P/J) class; the concrete
+    # part is then resolved by lib_id.
+    "POT":  Category.UNKNOWN,   # potentiometer
+    "LDR":  Category.UNKNOWN,   # photoresistor
+    "TH":   Category.UNKNOWN,   # NTC thermistor
+    "NTC":  Category.UNKNOWN,
+    "IR":   Category.UNKNOWN,   # IR emitter / receiver
+    "PIR":  Category.UNKNOWN,   # motion sensor
+    "BZ":   Category.UNKNOWN,   # buzzer
+    "RLY":  Category.UNKNOWN,   # relay
+    "SRV":  Category.UNKNOWN,   # servo
+    "RGB":  Category.UNKNOWN,   # RGB LED
+    "PD":   Category.UNKNOWN,   # photodiode
+    "FSR":  Category.UNKNOWN,   # force-sensitive resistor
+    "REED": Category.UNKNOWN,   # reed switch
+    "MIC":  Category.UNKNOWN,   # microphone / sound sensor
+    "HALL": Category.UNKNOWN,   # hall-effect sensor
+    "TMP":  Category.UNKNOWN,   # analog temperature sensor
 }
 
 # Categories that are handled purely by PassiveModel (no Node subclass needed)
@@ -79,8 +98,8 @@ def category_of(reference: str) -> Category:
     """Derive category from a reference designator like 'R1', 'U3', 'FB2'."""
     # Strip trailing digits to get the prefix
     prefix = reference.rstrip("0123456789").upper()
-    # Try longest match first (e.g. "LED" before "L")
-    for length in (3, 2, 1):
+    # Try longest match first (e.g. "REED"/"LED" before "R"/"L")
+    for length in range(len(prefix), 0, -1):
         if prefix[:length] in PREFIX_CATEGORY:
             return PREFIX_CATEGORY[prefix[:length]]
     return Category.UNKNOWN

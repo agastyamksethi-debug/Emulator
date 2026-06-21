@@ -1,0 +1,17 @@
+{
+  "part": "Q_NPN",
+  "classification": "Transistor",
+  "description": "NPN BJT as a switch — base above Vbe pulls the collector down to the emitter (saturation)",
+  "protocol": "ANALOG",
+
+  "pins": {
+    "B": {"type": "base",      "note": "Base"},
+    "C": {"type": "collector", "note": "Collector"},
+    "E": {"type": "emitter",   "note": "Emitter"}
+  },
+
+  "vbe":   0.7,
+  "v_ce_sat": 0.2,
+
+  "simulation_model": "parts.transistor_npn.model.NPNTransistorNode"
+}

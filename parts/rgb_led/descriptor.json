@@ -1,0 +1,18 @@
+{
+  "part": "LED_RGB",
+  "classification": "LED",
+  "description": "RGB LED — three colour channels sharing a common pin; per-channel brightness from drive voltage",
+  "protocol": "GPIO",
+
+  "pins": {
+    "R":   {"type": "anode",  "note": "Red channel"},
+    "G":   {"type": "anode",  "note": "Green channel"},
+    "B":   {"type": "anode",  "note": "Blue channel"},
+    "COM": {"type": "common", "note": "Common cathode/anode"}
+  },
+
+  "common_anode": false,
+  "vf":           2.0,
+
+  "simulation_model": "parts.rgb_led.model.RGBLedNode"
+}
