@@ -6,6 +6,17 @@
   "protocol": "GPIO",
   "datasheet": "esp32_datasheet_en.pdf",
 
+  "pin_contracts": {
+    "VDD":     {"role": "power_in", "required": true,  "v_min": 3.0, "v_max": 3.6},
+    "VDDA":    {"role": "power_in", "required": false, "v_min": 3.0, "v_max": 3.6},
+    "VDDA_18": {"role": "power_in", "required": false, "v_min": 1.7, "v_max": 1.9},
+    "GND_1": {"role": "gnd", "required": true},
+    "GND_2": {"role": "gnd"}, "GND_3": {"role": "gnd"}, "GND_4": {"role": "gnd"},
+    "GND_5": {"role": "gnd"}, "GND_6": {"role": "gnd"}, "GND_7": {"role": "gnd"},
+    "GND_8": {"role": "gnd"},
+    "CHIP_EN": {"role": "digital_in", "required": true}
+  },
+
   "package": "BGA-48",
   "visual": {
     "width_mm": 18,
