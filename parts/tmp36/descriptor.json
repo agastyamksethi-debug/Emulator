@@ -1,7 +1,7 @@
 {
   "part": "TMP36",
   "classification": "TemperatureSensor",
-  "description": "Analog temperature sensor \u2014 10 mV/\u00b0C with 500 mV offset (Vout = 0.5 + 0.01\u00b7T)",
+  "description": "Analog temperature sensor — 10 mV/°C with 500 mV offset (Vout = 0.5 + 0.01·T)",
   "protocol": "ANALOG",
   "pins": {
     "VCC": {
@@ -34,5 +34,6 @@
       "required": true
     }
   },
-  "tolerance": 0.02
+  "tolerance": 0.02,
+  "idd_ma": 0.05
 }

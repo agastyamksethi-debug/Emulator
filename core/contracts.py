@@ -51,6 +51,7 @@ class PinContract:
     v_min:        float | None = None
     v_max:        float | None = None
     needs_pullup: bool    = False
+    i_max_ma:     float | None = None   # output drive limit (digital_out) for MNA over-current
 
 
 @dataclass(frozen=True)
@@ -115,6 +116,7 @@ def load_pin_contracts(descriptor: dict) -> dict[str, PinContract]:
             v_min=spec.get("v_min"),
             v_max=spec.get("v_max"),
             needs_pullup=bool(spec.get("needs_pullup", False)),
+            i_max_ma=spec.get("i_max_ma"),
         )
     return out
 

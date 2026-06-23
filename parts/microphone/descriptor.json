@@ -1,7 +1,7 @@
 {
   "part": "Microphone",
   "classification": "SoundSensor",
-  "description": "Analog microphone / sound sensor \u2014 output swings around a mid-supply bias with sound level",
+  "description": "Analog microphone / sound sensor — output swings around a mid-supply bias with sound level",
   "protocol": "ANALOG",
   "pins": {
     "VCC": {
@@ -34,5 +34,6 @@
       "required": true
     }
   },
-  "tolerance": 0.05
+  "tolerance": 0.05,
+  "idd_ma": 1.5
 }

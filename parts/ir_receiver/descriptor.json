@@ -1,7 +1,7 @@
 {
   "part": "IR_Receiver",
   "classification": "IR_Receiver",
-  "description": "Demodulating IR receiver (TSOP-style) \u2014 OUT is active-LOW when a modulated IR carrier is present",
+  "description": "Demodulating IR receiver (TSOP-style) — OUT is active-LOW when a modulated IR carrier is present",
   "protocol": "GPIO",
   "pins": {
     "OUT": {
@@ -33,5 +33,6 @@
       "role": "gnd",
       "required": true
     }
-  }
+  },
+  "idd_ma": 1.5
 }

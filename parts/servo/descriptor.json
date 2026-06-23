@@ -1,7 +1,7 @@
 {
   "part": "Servo",
   "classification": "Servo",
-  "description": "Hobby servo \u2014 control signal duty maps to shaft angle 0\u2013180\u00b0",
+  "description": "Hobby servo — control signal duty maps to shaft angle 0–180°",
   "protocol": "PWM",
   "pins": {
     "SIG": {
@@ -35,5 +35,6 @@
       "role": "gnd",
       "required": true
     }
-  }
+  },
+  "idd_ma": 10.0
 }

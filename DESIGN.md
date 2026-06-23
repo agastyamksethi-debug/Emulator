@@ -21,9 +21,11 @@ characterization, and corner/tolerance analysis.
 ### Layer 0 — Pin contracts + tolerances (metadata)  ← implemented in core/contracts.py
 Descriptors declare, per pin, an electrical `role` (power_in/power_out/gnd/
 digital_in/digital_out/open_drain/analog_in/analog_out/i2c/nc), whether it is
-`required`, a `v_min`/`v_max` window (for power), and `needs_pullup`. Components
-declare a `tolerance` (fractional); passives fall back to class defaults
-(R 1%, C 10%, L/FB 10%, else 5%). Everything downstream reasons over this metadata.
+`required`, a `v_min`/`v_max` window (for power), `needs_pullup`, and an optional
+`i_max_ma` output drive limit. Components declare a `tolerance` (fractional;
+passives fall back to class defaults R 1% / C 10% / L,FB 10% / else 5%). ICs/MCUs
+declare `idd_ma` (supply current) and GPIO drive specs (`gpio_voh`,
+`gpio_rout_ohm`, `gpio_imax_ma`). All 20 part descriptors carry contracts.
 
 ### Layer 1 — Identifier / planner (static, the "compile" pass)
 Scans netlist + contracts and emits a **SimPlan**: a list of *phenomena*, each tagged
@@ -82,8 +84,16 @@ by all layers. GUI draws pin halos / dashed-red nets / part badges + a Problems 
   (prove cache-hit on re-run); tolerance corners → rise-time band + spec-violation flag;
   missing-pull-up / floating-AD0 fault diagnostics. Headless tests; existing sketches
   still pass. No GUI overlays yet.
-- **Phase 2+:** widen the template library, wire MNA for advanced islands, GUI overlays
-  + Problems panel, on-disk cache, runtime ±δ jitter on passives/rails.
+- **Phase 2 (done):** MNA "analog island" tier (`core/islands.py`) with Thévenin
+  boundary stitching + indeterminate-logic detection; Problems panel + canvas
+  diagnostic overlays, analyzer on load/run; pin contracts across all parts.
+- **MNA of IC/MCU (done):** `core/mna_ic.py` models MCU outputs as Thévenin drivers
+  and DC-solves the load island for worst-case GPIO current (over-current /
+  near-limit flags, e.g. an LED with no series resistor), plus per-rail
+  supply-current tally from `idd_ma`.
+- **Phase 3 (next):** generic-IC output over-current (digital_out `i_max_ma`),
+  transient/AC on islands, brown-out via rail source impedance, schematic/net
+  overlay view, on-disk cache, runtime ±δ jitter on passives/rails.
 
 ## Prerequisites / risks
 - Metadata coverage is the gate — the planner is only as good as the contracts.

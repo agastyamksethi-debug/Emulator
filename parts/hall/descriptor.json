@@ -1,7 +1,7 @@
 {
   "part": "Hall",
   "classification": "HallSensor",
-  "description": "Ratiometric hall-effect sensor \u2014 analog output centred at mid-supply, deflecting with magnetic field polarity/strength",
+  "description": "Ratiometric hall-effect sensor — analog output centred at mid-supply, deflecting with magnetic field polarity/strength",
   "protocol": "ANALOG",
   "pins": {
     "VCC": {
@@ -33,5 +33,6 @@
       "required": true
     }
   },
-  "tolerance": 0.03
+  "tolerance": 0.03,
+  "idd_ma": 8.0
 }

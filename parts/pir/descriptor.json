@@ -1,7 +1,7 @@
 {
   "part": "PIR",
   "classification": "MotionSensor",
-  "description": "Passive-infrared motion sensor \u2014 OUT goes HIGH on motion and holds for a retrigger time",
+  "description": "Passive-infrared motion sensor — OUT goes HIGH on motion and holds for a retrigger time",
   "protocol": "GPIO",
   "pins": {
     "VCC": {
@@ -33,5 +33,6 @@
       "role": "gnd",
       "required": true
     }
-  }
+  },
+  "idd_ma": 0.15
 }
