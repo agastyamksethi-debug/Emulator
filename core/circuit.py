@@ -88,6 +88,7 @@ _TYPE_TO_LIB_ID: dict[str, str] = {
     "rgb_led":         "Device:LED_RGB",
     "transistor_npn":  "Device:Q_NPN",
     "npn":             "Device:Q_NPN",
+    "mpu6050":         "Device:MPU6050",
     "esp32-wroom-32":  "ESP32-WROOM-32:ESP32-WROOM-32",
 }
 

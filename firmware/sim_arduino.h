@@ -21,12 +21,15 @@
  *   SERLN <text>                 Serial.println   → OK
  *   SER_AVAIL                    Serial.available → <int>
  *   SER_READ                     Serial.read      → <int>
+ *   I2CW <addr> <hexbytes>       Wire write txn   → <status int> (0 = ACK)
+ *   I2CR <addr> <len>            Wire requestFrom → <hexbytes>
  *   READY                        setup() done    (no response)
  */
 
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <cstdint>
 
 // ── Arduino constants ────────────────────────────────────────────────────────
 #define HIGH          1
@@ -35,6 +38,10 @@
 #define OUTPUT        1
 #define INPUT_PULLUP  2
 #define INPUT_PULLDOWN 3
+#define DEC 10
+#define HEX 16
+#define OCT 8
+#define BIN 2
 #define LED_BUILTIN   2
 #define A0  36
 #define A1  37
@@ -182,8 +189,88 @@ struct _SerialClass {
     void println(unsigned long v)          { char b[32]; snprintf(b,32,"%lu",v);   _emit(b, true);  }
     void print(double v, int p = 2)        { char b[32]; snprintf(b,32,"%.*f",p,v);_emit(b, false); }
     void println(double v, int p = 2)      { char b[32]; snprintf(b,32,"%.*f",p,v);_emit(b, true);  }
+
+    // base-aware integer printing: Serial.print(x, HEX/DEC/OCT/BIN)
+    void _emit_base(long v, int base, bool nl) {
+        char b[40];
+        if (base == 16)      snprintf(b, sizeof(b), "%lX", v);
+        else if (base == 8)  snprintf(b, sizeof(b), "%lo", v);
+        else if (base == 2) {
+            unsigned long u = (unsigned long)v; int i = 0; char t[34];
+            if (u == 0) t[i++] = '0';
+            while (u) { t[i++] = char('0' + (u & 1)); u >>= 1; }
+            int j = 0; while (i > 0) b[j++] = t[--i]; b[j] = '\0';
+        }
+        else                 snprintf(b, sizeof(b), "%ld", v);
+        _emit(b, nl);
+    }
+    void print(int v, int base)            { _emit_base(v, base, false); }
+    void println(int v, int base)          { _emit_base(v, base, true);  }
+    void print(long v, int base)           { _emit_base(v, base, false); }
+    void println(long v, int base)         { _emit_base(v, base, true);  }
+
     int  available()                       { _sim_writeln("SER_AVAIL"); return _sim_recv_int(); }
     int  read()                            { _sim_writeln("SER_READ");  return _sim_recv_int(); }
 };
 
 inline _SerialClass Serial;
+
+// ── Wire / I2C ─────────────────────────────────────────────────────────────────
+// Buffers the master's transaction, then exchanges it with Python over IPC.
+// Typical use: beginTransmission → write(reg)[→write(val)…] → endTransmission,
+// then requestFrom → read()×N.
+struct _TwoWire {
+    uint8_t _tx[64];
+    int     _txlen = 0;
+    uint8_t _addr  = 0;
+    uint8_t _rx[64];
+    int     _rxlen = 0;
+    int     _rxpos = 0;
+
+    void begin() {}
+    void begin(int /*sda*/, int /*scl*/) {}
+    void setClock(uint32_t /*hz*/) {}
+
+    void beginTransmission(uint8_t addr) { _addr = addr; _txlen = 0; }
+
+    size_t write(uint8_t b) {
+        if (_txlen < (int)sizeof(_tx)) _tx[_txlen++] = b;
+        return 1;
+    }
+    size_t write(int b) { return write((uint8_t)b); }
+    size_t write(const uint8_t* d, size_t n) {
+        for (size_t i = 0; i < n; i++) write(d[i]);
+        return n;
+    }
+
+    uint8_t endTransmission(bool /*stop*/ = true) {
+        char hex[140]; int p = 0;
+        for (int i = 0; i < _txlen; i++)
+            p += snprintf(hex + p, sizeof(hex) - p, "%02X", _tx[i]);
+        hex[p] = '\0';
+        char msg[180];
+        snprintf(msg, sizeof(msg), "I2CW %d %s", _addr, hex);
+        _sim_writeln(msg);
+        return (uint8_t)_sim_recv_int();
+    }
+
+    uint8_t requestFrom(uint8_t addr, uint8_t len, bool /*stop*/ = true) {
+        char msg[48];
+        snprintf(msg, sizeof(msg), "I2CR %d %d", addr, len);
+        _sim_writeln(msg);
+        char resp[140];
+        _sim_readline(resp, sizeof(resp));
+        _rxlen = 0; _rxpos = 0;
+        for (int i = 0; resp[i] && resp[i + 1] && _rxlen < (int)sizeof(_rx); i += 2) {
+            char bs[3] = { resp[i], resp[i + 1], '\0' };
+            _rx[_rxlen++] = (uint8_t)strtol(bs, nullptr, 16);
+        }
+        return (uint8_t)_rxlen;
+    }
+    uint8_t requestFrom(int addr, int len)            { return requestFrom((uint8_t)addr, (uint8_t)len); }
+
+    int available() { return _rxlen - _rxpos; }
+    int read()      { return _rxpos < _rxlen ? _rx[_rxpos++] : -1; }
+};
+
+inline _TwoWire Wire;

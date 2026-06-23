@@ -103,8 +103,9 @@ class CppFirmware:
     IPC bridge between a compiled Arduino sketch and the Python simulation bus.
 
     Protocol summary (each message is one line):
-      C++ → Python:  PM DW DR AR AW DELAY MILLIS SER SERLN SER_AVAIL SER_READ READY
-      Python → C++:  OK  or  <integer>
+      C++ → Python:  PM DW DR AR AW DELAY MILLIS SER SERLN SER_AVAIL SER_READ
+                     I2CW I2CR READY
+      Python → C++:  OK  or  <integer>  or  <hexbytes>
     """
 
     def __init__(self, binary: str, pin_map: dict[int, str],
@@ -250,6 +251,29 @@ class CppFirmware:
             with self._serial_in_lock:
                 byte = self._serial_in_buf.popleft() if self._serial_in_buf else -1
             self._send(str(byte))
+
+        elif op == "I2CW":
+            # I2CW <addr> <hexbytes> — Wire write transaction.
+            # First byte is the register pointer; the rest is the payload.
+            addr_s, _, hex_s = rest.partition(" ")
+            addr = int(addr_s)
+            payload = bytes.fromhex(hex_s.strip()) if hex_s.strip() else b""
+            status = 2   # NAK (no such device)
+            if self._bus is not None:
+                reg  = payload[0] if payload else 0
+                data = payload[1:] if len(payload) > 1 else b""
+                status = 0 if self._bus.i2c_write(addr, reg, data) else 2
+            self._send(str(status))
+
+        elif op == "I2CR":
+            # I2CR <addr> <len> — Wire requestFrom; reads from the device's
+            # current register pointer (set by the preceding I2CW).
+            addr_s, _, len_s = rest.partition(" ")
+            addr, length = int(addr_s), int(len_s)
+            data = b""
+            if self._bus is not None and addr in self._bus.i2c._devices:
+                data = self._bus.i2c_read(addr, 0, length)
+            self._send(data.hex().upper())
 
         elif op == "MILLIS":
             t = int(self._runner.elapsed_ms) if self._runner else 0

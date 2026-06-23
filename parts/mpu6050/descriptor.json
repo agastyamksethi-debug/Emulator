@@ -1,0 +1,35 @@
+{
+  "part": "MPU6050",
+  "manufacturer": "InvenSense",
+  "classification": "IMU",
+  "description": "6-axis IMU — 3-axis accelerometer + 3-axis gyroscope + temperature, over I2C",
+  "protocol": "I2C",
+
+  "i2c_address": 104,
+
+  "pins": {
+    "VCC": {"type": "power",     "note": "2.3–3.4 V supply"},
+    "GND": {"type": "ground",    "note": "Ground"},
+    "SCL": {"type": "i2c_clock", "note": "I2C clock"},
+    "SDA": {"type": "i2c_data",  "note": "I2C data"},
+    "AD0": {"type": "address",   "note": "LSB of I2C address (low=0x68, high=0x69)"},
+    "INT": {"type": "interrupt", "note": "Data-ready / motion interrupt"},
+    "XDA": {"type": "i2c_data",  "note": "Auxiliary I2C data (master)"},
+    "XCL": {"type": "i2c_clock", "note": "Auxiliary I2C clock (master)"}
+  },
+
+  "pin_contracts": {
+    "VCC": {"role": "power_in",   "required": true, "v_min": 2.375, "v_max": 3.46},
+    "GND": {"role": "gnd",         "required": true},
+    "SCL": {"role": "i2c",         "required": true, "needs_pullup": true},
+    "SDA": {"role": "i2c",         "required": true, "needs_pullup": true},
+    "AD0": {"role": "digital_in",  "required": false},
+    "INT": {"role": "digital_out", "required": false},
+    "XDA": {"role": "nc",          "required": false},
+    "XCL": {"role": "nc",          "required": false}
+  },
+
+  "tolerance": 0.03,
+
+  "simulation_model": "parts.mpu6050.model.MPU6050Node"
+}

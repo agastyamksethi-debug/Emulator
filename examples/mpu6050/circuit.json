@@ -1,0 +1,30 @@
+{
+  "mcu": "U1",
+
+  "power": {
+    "3V3": 3.3,
+    "GND": 0.0
+  },
+
+  "parts": {
+    "U1": {
+      "type": "esp32-wroom-32",
+      "pins": {
+        "VDD":   "3V3",
+        "GND_1": "GND",
+        "IO21":  "SDA",
+        "IO22":  "SCL"
+      }
+    },
+
+    "IMU1": {
+      "type": "mpu6050",
+      "pins": {
+        "VCC": "3V3",
+        "GND": "GND",
+        "SDA": "SDA",
+        "SCL": "SCL"
+      }
+    }
+  }
+}

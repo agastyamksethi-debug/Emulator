@@ -77,6 +77,8 @@ PREFIX_CATEGORY: dict[str, Category] = {
     "MIC":  Category.UNKNOWN,   # microphone / sound sensor
     "HALL": Category.UNKNOWN,   # hall-effect sensor
     "TMP":  Category.UNKNOWN,   # analog temperature sensor
+    "IMU":  Category.UNKNOWN,   # inertial measurement unit
+    "MPU":  Category.UNKNOWN,   # MPU-series IMU
 }
 
 # Categories that are handled purely by PassiveModel (no Node subclass needed)
