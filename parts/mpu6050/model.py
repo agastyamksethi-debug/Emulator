@@ -106,6 +106,8 @@ class MPU6050Node(Node):
 
     def _read_reg(self, reg: int) -> int:
         if _ACCEL_XOUT_H <= reg <= _GYRO_XOUT_H + 5:   # 0x3B … 0x48
+            if self.asleep:        # measurement registers hold 0 until woken
+                return 0
             return self._sensor_block()[reg - _ACCEL_XOUT_H]
         return self._regs[reg & 0x7F]
 

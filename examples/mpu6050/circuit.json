@@ -10,10 +10,11 @@
     "U1": {
       "type": "esp32-wroom-32",
       "pins": {
-        "VDD":   "3V3",
-        "GND_1": "GND",
-        "IO21":  "SDA",
-        "IO22":  "SCL"
+        "VDD":     "3V3",
+        "GND_1":   "GND",
+        "CHIP_EN": "3V3",
+        "IO21":    "SDA",
+        "IO22":    "SCL"
       }
     },
 
@@ -23,8 +24,25 @@
         "VCC": "3V3",
         "GND": "GND",
         "SDA": "SDA",
-        "SCL": "SCL"
+        "SCL": "SCL",
+        "AD0": "GND"
       }
+    },
+
+    "R1": {
+      "type":  "resistor",
+      "value": "4.7k",
+      "pins":  { "1": "3V3", "2": "SDA" }
+    },
+    "R2": {
+      "type":  "resistor",
+      "value": "4.7k",
+      "pins":  { "1": "3V3", "2": "SCL" }
+    },
+    "C1": {
+      "type":  "capacitor",
+      "value": "100n",
+      "pins":  { "1": "3V3", "2": "GND" }
     }
   }
 }
