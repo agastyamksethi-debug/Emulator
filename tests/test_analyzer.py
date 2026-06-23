@@ -59,6 +59,42 @@ def test_faulty_board_flags_miswiring():
     assert plan.errors()                    # power window is an error
 
 
+# AD0 driven by a 10k/10k divider → ~1.65 V, an ambiguous logic level
+_DIVIDER = {
+    "power": {"3V3": 3.3, "GND": 0.0},
+    "parts": {
+        "IMU1": {"type": "mpu6050",
+                 "pins": {"VCC": "3V3", "GND": "GND", "SDA": "SDA",
+                          "SCL": "SCL", "AD0": "ADDR"}},
+        "R1": {"type": "resistor", "value": "10k", "pins": {"1": "3V3", "2": "ADDR"}},
+        "R2": {"type": "resistor", "value": "10k", "pins": {"1": "ADDR", "2": "GND"}},
+        "R3": {"type": "resistor", "value": "4.7k", "pins": {"1": "3V3", "2": "SDA"}},
+        "R4": {"type": "resistor", "value": "4.7k", "pins": {"1": "3V3", "2": "SCL"}},
+    },
+}
+
+
+def test_island_mna_solves_divider():
+    from core.islands import find_islands, solve_island
+    div = next(i for i in find_islands(_DIVIDER, {"3V3", "GND"})
+               if {"R1", "R2"} <= i["parts"])
+    v = solve_island(_DIVIDER, div, {"3V3": 3.3, "GND": 0.0})
+    assert abs(v["ADDR"] - 1.65) < 0.02, v
+
+
+def test_advanced_tier_flags_indeterminate_level():
+    plan = analyze(_DIVIDER, advanced=True)
+    assert any(d.code == "erc.indeterminate_level" and "ADDR" in d.nets
+               for d in plan.diagnostics), plan.diagnostics
+    # and it produced an analog_island characterization
+    assert any(p.kind == "analog_island" for p in plan.phenomena)
+
+
+def test_basic_tier_skips_mna():
+    plan = analyze(_DIVIDER, advanced=False)
+    assert not any(p.kind == "analog_island" for p in plan.phenomena)
+
+
 def test_cache_makes_reruns_free():
     cache = CharacterizationCache()
     analyze(_GOOD, cache)

@@ -121,7 +121,8 @@ def _build_nets(circuit: dict, descriptors: dict) -> dict[str, list[tuple]]:
 
 # ── analysis ────────────────────────────────────────────────────────────────────
 
-def analyze(circuit: dict, cache: CharacterizationCache | None = None) -> SimPlan:
+def analyze(circuit: dict, cache: CharacterizationCache | None = None,
+            advanced: bool = False) -> SimPlan:
     cache = cache or CharacterizationCache()
     descriptors = {ref: _load_descriptor(p) for ref, p in circuit.get("parts", {}).items()}
     power = circuit.get("power", {})                 # net -> voltage
@@ -218,7 +219,55 @@ def analyze(circuit: dict, cache: CharacterizationCache | None = None) -> SimPla
         phenomena.append(Phenomenon("power_sequence", "intermediate", (rail,),
                                     (), params, result, hit))
 
+    # ---- Advanced tier: solve coupled analog islands with MNA -------------------
+    if advanced:
+        _analyze_islands(circuit, descriptors, nets, power, phenomena, diags)
+
     return SimPlan(phenomena, diags)
+
+
+def _analyze_islands(circuit, descriptors, nets, power, phenomena, diags):
+    """Solve coupled analog clusters with MNA; flag indeterminate logic levels."""
+    from core.islands import find_islands, solve_island
+
+    rails = set(power)
+    driven = dict(power)                 # known boundary voltages (rails)
+    vdd = max([v for v in power.values()] + [3.3])
+    v_il, v_ih = 0.3 * vdd, 0.7 * vdd    # CMOS-ish forbidden band
+
+    for island in find_islands(circuit, rails):
+        if not island["internal_nets"]:
+            continue
+        try:
+            volts = solve_island(circuit, island, driven)
+        except Exception as exc:         # numerical / unsupported device — skip
+            diags.append(Diagnostic(Severity.INFO,
+                f"analog island {sorted(island['parts'])} not solved: {exc}",
+                code="mna.skip", parts=tuple(sorted(island["parts"]))))
+            continue
+
+        phenomena.append(Phenomenon(
+            "analog_island", "advanced",
+            tuple(sorted(island["internal_nets"])),
+            tuple(sorted(island["parts"])),
+            {"boundary": sorted(island["boundary_nets"])},
+            {"voltages": {n: round(volts.get(n, 0.0), 4)
+                          for n in sorted(island["internal_nets"])}}))
+
+        # indeterminate-logic check on any digital/i2c input sitting on an
+        # internal node whose solved voltage lands in the forbidden band
+        for net in island["internal_nets"]:
+            v = volts.get(net)
+            if v is None or not (v_il < v < v_ih):
+                continue
+            for ref, pin, role in nets.get(net, []):
+                if role in (PinRole.DIGITAL_IN, PinRole.I2C):
+                    diags.append(Diagnostic(Severity.WARNING,
+                        f"{role.value} pin '{pin}' on '{net}' solves to "
+                        f"{v:.2f} V — indeterminate logic level "
+                        f"(forbidden band {v_il:.2f}–{v_ih:.2f} V)",
+                        code="erc.indeterminate_level",
+                        parts=(ref,), pins=(pin,), nets=(net,)))
 
 
 # ── topology probes ───────────────────────────────────────────────────────────
