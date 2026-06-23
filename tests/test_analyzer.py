@@ -95,6 +95,43 @@ def test_basic_tier_skips_mna():
     assert not any(p.kind == "analog_island" for p in plan.phenomena)
 
 
+_ESP = {"VDD": "3V3", "GND_1": "GND", "CHIP_EN": "3V3", "IO2": "LEDA"}
+
+
+def test_gpio_overcurrent_without_resistor():
+    board = {"power": {"3V3": 3.3, "GND": 0.0}, "parts": {
+        "U1": {"type": "esp32-wroom-32", "pins": _ESP},
+        "D1": {"type": "led", "color": "red", "pins": {"A": "LEDA", "K": "GND"}},
+    }}
+    plan = analyze(board, advanced=True)
+    assert any(d.code == "erc.gpio_overcurrent" for d in plan.diagnostics), plan.diagnostics
+
+
+def test_gpio_safe_with_series_resistor():
+    board = {"power": {"3V3": 3.3, "GND": 0.0}, "parts": {
+        "U1": {"type": "esp32-wroom-32", "pins": _ESP},
+        "R1": {"type": "resistor", "value": "220", "pins": {"1": "LEDA", "2": "LEDK"}},
+        "D1": {"type": "led", "color": "red", "pins": {"A": "LEDK", "K": "GND"}},
+    }}
+    plan = analyze(board, advanced=True)
+    assert not any(d.code == "erc.gpio_overcurrent" for d in plan.diagnostics)
+    drive = next(p for p in plan.phenomena if p.kind == "gpio_drive")
+    assert drive.result["i_ma"] < 10.0
+
+
+def test_supply_current_tally():
+    board = {"power": {"3V3": 3.3, "GND": 0.0}, "parts": {
+        "U1": {"type": "esp32-wroom-32",
+               "pins": {"VDD": "3V3", "GND_1": "GND", "CHIP_EN": "3V3"}},
+        "IMU1": {"type": "mpu6050",
+                 "pins": {"VCC": "3V3", "GND": "GND", "SDA": "SDA",
+                          "SCL": "SCL", "AD0": "GND"}},
+    }}
+    plan = analyze(board, advanced=True)
+    sup = next(p for p in plan.phenomena if p.kind == "supply_current")
+    assert abs(sup.result["current_ma"] - 83.9) < 0.1
+
+
 def test_cache_makes_reruns_free():
     cache = CharacterizationCache()
     analyze(_GOOD, cache)

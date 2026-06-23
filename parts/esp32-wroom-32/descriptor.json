@@ -17,6 +17,11 @@
     "CHIP_EN": {"role": "digital_in", "required": true}
   },
 
+  "idd_ma": 80,
+  "gpio_voh": 3.3,
+  "gpio_rout_ohm": 25,
+  "gpio_imax_ma": 40,
+
   "package": "BGA-48",
   "visual": {
     "width_mm": 18,

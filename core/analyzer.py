@@ -235,7 +235,11 @@ def _analyze_islands(circuit, descriptors, nets, power, phenomena, diags):
     vdd = max([v for v in power.values()] + [3.3])
     v_il, v_ih = 0.3 * vdd, 0.7 * vdd    # CMOS-ish forbidden band
 
-    for island in find_islands(circuit, rails):
+    islands = find_islands(circuit, rails)
+    _analyze_gpio_drive(circuit, descriptors, islands, driven, phenomena, diags)
+    _analyze_supply(circuit, descriptors, power, phenomena, diags)
+
+    for island in islands:
         if not island["internal_nets"]:
             continue
         try:
@@ -268,6 +272,52 @@ def _analyze_islands(circuit, descriptors, nets, power, phenomena, diags):
                         f"(forbidden band {v_il:.2f}–{v_ih:.2f} V)",
                         code="erc.indeterminate_level",
                         parts=(ref,), pins=(pin,), nets=(net,)))
+
+
+def _analyze_gpio_drive(circuit, descriptors, islands, driven, phenomena, diags):
+    """Worst-case MCU GPIO drive current into each load island → over-current."""
+    from core.mna_ic import mcu_output_pins, gpio_drive_current
+
+    by_net = {}
+    for isl in islands:
+        for n in isl["nets"]:
+            by_net.setdefault(n, isl)
+
+    for ref, pin, net, specs in mcu_output_pins(circuit, descriptors, set(driven)):
+        isl = by_net.get(net)
+        if isl is None:
+            continue
+        try:
+            i_a = gpio_drive_current(circuit, isl, net, specs["voh"],
+                                     specs["rout"], driven)
+        except Exception:
+            continue
+        i_ma = i_a * 1000.0
+        phenomena.append(Phenomenon(
+            "gpio_drive", "advanced", (net,), (ref,),
+            {"pin": pin, "imax_ma": specs["imax_a"] * 1000.0},
+            {"i_ma": round(i_ma, 2)}))
+        if i_a > specs["imax_a"]:
+            diags.append(Diagnostic(Severity.ERROR,
+                f"GPIO '{pin}' would source {i_ma:.0f} mA into '{net}' if driven "
+                f"HIGH — exceeds the {specs['imax_a']*1000:.0f} mA pin limit "
+                f"(add a series current-limit resistor)",
+                code="erc.gpio_overcurrent", parts=(ref,), pins=(pin,), nets=(net,)))
+        elif i_a > 0.6 * specs["imax_a"]:
+            diags.append(Diagnostic(Severity.WARNING,
+                f"GPIO '{pin}' would source {i_ma:.0f} mA into '{net}' — near the "
+                f"{specs['imax_a']*1000:.0f} mA pin limit",
+                code="erc.gpio_highcurrent", parts=(ref,), pins=(pin,), nets=(net,)))
+
+
+def _analyze_supply(circuit, descriptors, power, phenomena, diags):
+    """Per-rail supply-current tally from parts' idd_ma."""
+    from core.mna_ic import supply_currents
+
+    totals = supply_currents(circuit, descriptors, power)
+    for rail, ma in totals.items():
+        phenomena.append(Phenomenon("supply_current", "intermediate", (rail,), (),
+                                    {"rail": rail}, {"current_ma": round(ma, 2)}))
 
 
 # ── topology probes ───────────────────────────────────────────────────────────

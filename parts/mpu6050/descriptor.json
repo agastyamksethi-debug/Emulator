@@ -30,6 +30,7 @@
   },
 
   "tolerance": 0.03,
+  "idd_ma": 3.9,
 
   "simulation_model": "parts.mpu6050.model.MPU6050Node"
 }
