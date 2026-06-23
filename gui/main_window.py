@@ -13,6 +13,7 @@ from PyQt6.QtCore import Qt, QThread, pyqtSignal, pyqtSlot
 from gui.panels.editor_panel   import EditorPanel
 from gui.panels.terminal_panel import TerminalPanel
 from gui.panels.serial_panel   import SerialPanel
+from gui.panels.problems_panel import ProblemsPanel
 from gui.rw_canvas             import RWCanvas
 
 
@@ -438,6 +439,8 @@ class MainWindow(QMainWindow):
         self.rw_canvas = RWCanvas()
         self.terminal  = TerminalPanel()
         self.serial    = SerialPanel()
+        self.problems  = ProblemsPanel()
+        self.problems.locate.connect(self.rw_canvas.focus_ref)
 
         h_ss = "QSplitter::handle { background:#BEC5C5; height:1px; }"
         v_ss = "QSplitter::handle { background:#BEC5C5; width:1px; }"
@@ -446,7 +449,8 @@ class MainWindow(QMainWindow):
         left_split.setStyleSheet(h_ss)
         left_split.addWidget(self.editor)
         left_split.addWidget(self.terminal)
-        left_split.setSizes([610, 210])
+        left_split.addWidget(self.problems)
+        left_split.setSizes([520, 150, 150])
 
         right_split = QSplitter(Qt.Orientation.Vertical)
         right_split.setStyleSheet(h_ss)
@@ -506,6 +510,7 @@ class MainWindow(QMainWindow):
         self.terminal.clear()
         self.serial.reset_plot()
         self._sb.reset_counts()
+        self._run_analyzer()          # ERC pass before the firmware runs
         self._sb.set_state("running")
 
         self._worker = SimWorker()
@@ -589,7 +594,27 @@ class MainWindow(QMainWindow):
         self._circuit = circuit
         self.rw_canvas.load_circuit(circuit)
         self._apply_auto_fidelity()
+        self._run_analyzer()
         self.terminal.info("Circuit received from KiCad")
+
+    def _run_analyzer(self):
+        """Run the ERC / planner pass and surface results in Problems + overlays."""
+        if self._circuit is None:
+            return
+        from core.analyzer import analyze
+        from core.fidelity import CONFIG
+        try:
+            plan = analyze(self._circuit, advanced=CONFIG.is_advanced("real_world"))
+        except Exception as exc:
+            self.terminal.error(f"Analyzer failed: {exc}")
+            return
+        self.problems.set_diagnostics(plan.diagnostics)
+        self.rw_canvas.set_diagnostics(plan.diagnostics)
+        n_e, n_w = len(plan.errors()), len(plan.warnings())
+        if n_e or n_w:
+            self.terminal.warn(f"ERC: {n_e} error(s), {n_w} warning(s) — see Problems")
+        else:
+            self.terminal.info("ERC: no problems detected")
 
     def _apply_auto_fidelity(self):
         """If auto mode is on, re-pick fidelity tiers from the loaded circuit."""
@@ -612,6 +637,7 @@ class MainWindow(QMainWindow):
                 self._circuit = json.load(f)
             self.rw_canvas.load_circuit(self._circuit)
             self._apply_auto_fidelity()
+            self._run_analyzer()
             self.terminal.info(f"Circuit loaded: {os.path.basename(path)}")
         except Exception as e:
             self.terminal.error(f"Circuit load failed: {e}")

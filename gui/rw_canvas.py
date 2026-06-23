@@ -176,6 +176,7 @@ class _BaseNode(QGraphicsItem):
         self.ref        = ref
         self.type_label = type_label
         self._ports: list[_Port] = []
+        self._diag_sev: str | None = None   # "error" | "warning" | "info" | None
 
         self.setFlag(QGraphicsItem.GraphicsItemFlag.ItemIsMovable)
         self.setFlag(QGraphicsItem.GraphicsItemFlag.ItemSendsGeometryChanges)
@@ -202,6 +203,20 @@ class _BaseNode(QGraphicsItem):
         # orange top accent line
         painter.setPen(QPen(_ACCENT, 2))
         painter.drawLine(int(self._CR), 1, int(self._W - self._CR), 1)
+
+        # diagnostic halo (ERC overlay)
+        if self._diag_sev:
+            clr = QColor("#DC322F") if self._diag_sev == "error" else QColor("#B58900")
+            painter.setBrush(Qt.BrushStyle.NoBrush)
+            painter.setPen(QPen(clr, 2.5))
+            painter.drawRoundedRect(1, 1, self._W - 2, self._H - 2, self._CR, self._CR)
+            painter.setPen(Qt.PenStyle.NoPen)
+            painter.setBrush(QBrush(clr))
+            painter.drawEllipse(QPointF(self._W - 12, 12), 5, 5)
+
+    def set_diagnostic(self, severity: str | None):
+        self._diag_sev = severity
+        self.update()
 
     def _add_port(self, rw_type: str, direction: str, label: str) -> _Port:
         same_type = [p for p in self._ports if p.rw_type == rw_type]
@@ -1381,6 +1396,27 @@ class RWCanvas(QWidget):
         ldr_node = self.get_ldr(ref)
         if ldr_node is not None:
             ldr_node.update_reading(adc_value, light)
+
+    # ── ERC diagnostics overlay (Layer 4) ──────────────────────────────────────
+
+    def set_diagnostics(self, diags):
+        """Highlight nodes that carry analyzer diagnostics (worst severity wins)."""
+        rank = {"info": 0, "warning": 1, "error": 2}
+        worst: dict[str, str] = {}
+        for d in diags:
+            sev = d.severity.value
+            for ref in d.parts:
+                if ref not in worst or rank[sev] > rank[worst[ref]]:
+                    worst[ref] = sev
+        for ref, node in self._nodes.items():
+            node.set_diagnostic(worst.get(ref))
+
+    def focus_ref(self, ref: str):
+        """Centre the view on a part's node (Problems-panel double-click)."""
+        node = self._nodes.get(ref)
+        if node is not None:
+            self._view.centerOn(node)
+            node.setSelected(True)
 
     # ── connection handlers ───────────────────────────────────────────────────
 
