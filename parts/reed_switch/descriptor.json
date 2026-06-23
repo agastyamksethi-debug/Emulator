@@ -1,13 +1,25 @@
 {
   "part": "Reed",
   "classification": "Switch",
-  "description": "Reed switch — contacts close in the presence of a magnetic field",
+  "description": "Reed switch \u2014 contacts close in the presence of a magnetic field",
   "protocol": "GPIO",
-
   "pins": {
-    "1": {"type": "terminal", "note": "Contact A"},
-    "2": {"type": "terminal", "note": "Contact B"}
+    "1": {
+      "type": "terminal",
+      "note": "Contact A"
+    },
+    "2": {
+      "type": "terminal",
+      "note": "Contact B"
+    }
   },
-
-  "simulation_model": "parts.reed_switch.model.ReedSwitchNode"
+  "simulation_model": "parts.reed_switch.model.ReedSwitchNode",
+  "pin_contracts": {
+    "1": {
+      "role": "passive"
+    },
+    "2": {
+      "role": "passive"
+    }
+  }
 }

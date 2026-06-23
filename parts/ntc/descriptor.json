@@ -1,18 +1,30 @@
 {
   "part": "Thermistor_NTC",
   "classification": "Thermistor",
-  "description": "NTC thermistor in a voltage divider — resistance falls as temperature rises (Beta model)",
+  "description": "NTC thermistor in a voltage divider \u2014 resistance falls as temperature rises (Beta model)",
   "protocol": "ANALOG",
-
   "pins": {
-    "1": {"type": "terminal", "note": "Top terminal (to supply rail)"},
-    "2": {"type": "terminal", "note": "Divider output (to ADC pin)"}
+    "1": {
+      "type": "terminal",
+      "note": "Top terminal (to supply rail)"
+    },
+    "2": {
+      "type": "terminal",
+      "note": "Divider output (to ADC pin)"
+    }
   },
-
-  "r25":           10000,
-  "beta":          3950,
-  "r_fixed":       10000,
+  "r25": 10000,
+  "beta": 3950,
+  "r_fixed": 10000,
   "temperature_c": 25.0,
-
-  "simulation_model": "parts.ntc.model.NTCNode"
+  "simulation_model": "parts.ntc.model.NTCNode",
+  "pin_contracts": {
+    "1": {
+      "role": "passive"
+    },
+    "2": {
+      "role": "passive"
+    }
+  },
+  "tolerance": 0.05
 }

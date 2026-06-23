@@ -1,15 +1,26 @@
 {
   "part": "Buzzer",
   "classification": "Buzzer",
-  "description": "Active buzzer — sounds at its fixed frequency whenever it is driven above threshold",
+  "description": "Active buzzer \u2014 sounds at its fixed frequency whenever it is driven above threshold",
   "protocol": "GPIO",
-
   "pins": {
-    "1": {"type": "positive", "note": "Drive (+)"},
-    "2": {"type": "negative", "note": "Return (−)"}
+    "1": {
+      "type": "positive",
+      "note": "Drive (+)"
+    },
+    "2": {
+      "type": "negative",
+      "note": "Return (\u2212)"
+    }
   },
-
   "frequency_hz": 2400,
-
-  "simulation_model": "parts.buzzer.model.BuzzerNode"
+  "simulation_model": "parts.buzzer.model.BuzzerNode",
+  "pin_contracts": {
+    "1": {
+      "role": "passive"
+    },
+    "2": {
+      "role": "passive"
+    }
+  }
 }

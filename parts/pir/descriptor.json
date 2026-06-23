@@ -1,16 +1,37 @@
 {
   "part": "PIR",
   "classification": "MotionSensor",
-  "description": "Passive-infrared motion sensor — OUT goes HIGH on motion and holds for a retrigger time",
+  "description": "Passive-infrared motion sensor \u2014 OUT goes HIGH on motion and holds for a retrigger time",
   "protocol": "GPIO",
-
   "pins": {
-    "VCC": {"type": "power",       "note": "Supply"},
-    "OUT": {"type": "digital_out", "note": "Motion output (active high)"},
-    "GND": {"type": "ground",      "note": "Ground"}
+    "VCC": {
+      "type": "power",
+      "note": "Supply"
+    },
+    "OUT": {
+      "type": "digital_out",
+      "note": "Motion output (active high)"
+    },
+    "GND": {
+      "type": "ground",
+      "note": "Ground"
+    }
   },
-
   "hold_ms": 2000,
-
-  "simulation_model": "parts.pir.model.PIRNode"
+  "simulation_model": "parts.pir.model.PIRNode",
+  "pin_contracts": {
+    "VCC": {
+      "role": "power_in",
+      "required": true,
+      "v_min": 3.0,
+      "v_max": 5.5
+    },
+    "OUT": {
+      "role": "digital_out"
+    },
+    "GND": {
+      "role": "gnd",
+      "required": true
+    }
+  }
 }

@@ -1,17 +1,34 @@
 {
   "part": "Potentiometer",
   "classification": "Potentiometer",
-  "description": "3-terminal potentiometer — wiper voltage set by knob position",
+  "description": "3-terminal potentiometer \u2014 wiper voltage set by knob position",
   "protocol": "ANALOG",
-
   "pins": {
-    "1": {"type": "terminal", "note": "Terminal A (high end)"},
-    "W": {"type": "wiper",    "note": "Wiper (analog output)"},
-    "2": {"type": "terminal", "note": "Terminal B (low end)"}
+    "1": {
+      "type": "terminal",
+      "note": "Terminal A (high end)"
+    },
+    "W": {
+      "type": "wiper",
+      "note": "Wiper (analog output)"
+    },
+    "2": {
+      "type": "terminal",
+      "note": "Terminal B (low end)"
+    }
   },
-
   "resistance": "10k",
   "position": 0.5,
-
-  "simulation_model": "parts.potentiometer.model.PotentiometerNode"
+  "simulation_model": "parts.potentiometer.model.PotentiometerNode",
+  "pin_contracts": {
+    "1": {
+      "role": "passive"
+    },
+    "W": {
+      "role": "analog_out"
+    },
+    "2": {
+      "role": "passive"
+    }
+  }
 }

@@ -1,16 +1,38 @@
 {
   "part": "Microphone",
   "classification": "SoundSensor",
-  "description": "Analog microphone / sound sensor — output swings around a mid-supply bias with sound level",
+  "description": "Analog microphone / sound sensor \u2014 output swings around a mid-supply bias with sound level",
   "protocol": "ANALOG",
-
   "pins": {
-    "VCC": {"type": "power",      "note": "Supply"},
-    "OUT": {"type": "analog_out", "note": "Analog output (biased mid-supply)"},
-    "GND": {"type": "ground",     "note": "Ground"}
+    "VCC": {
+      "type": "power",
+      "note": "Supply"
+    },
+    "OUT": {
+      "type": "analog_out",
+      "note": "Analog output (biased mid-supply)"
+    },
+    "GND": {
+      "type": "ground",
+      "note": "Ground"
+    }
   },
-
   "swing": 0.9,
-
-  "simulation_model": "parts.microphone.model.MicrophoneNode"
+  "simulation_model": "parts.microphone.model.MicrophoneNode",
+  "pin_contracts": {
+    "VCC": {
+      "role": "power_in",
+      "required": true,
+      "v_min": 2.7,
+      "v_max": 5.5
+    },
+    "OUT": {
+      "role": "analog_out"
+    },
+    "GND": {
+      "role": "gnd",
+      "required": true
+    }
+  },
+  "tolerance": 0.05
 }
