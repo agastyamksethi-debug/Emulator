@@ -221,12 +221,12 @@ def analyze(circuit: dict, cache: CharacterizationCache | None = None,
 
     # ---- Advanced tier: solve coupled analog islands with MNA -------------------
     if advanced:
-        _analyze_islands(circuit, descriptors, nets, power, phenomena, diags)
+        _analyze_islands(circuit, descriptors, nets, power, phenomena, diags, cache)
 
     return SimPlan(phenomena, diags)
 
 
-def _analyze_islands(circuit, descriptors, nets, power, phenomena, diags):
+def _analyze_islands(circuit, descriptors, nets, power, phenomena, diags, cache):
     """Solve coupled analog clusters with MNA; flag indeterminate logic levels."""
     from core.islands import find_islands, solve_island
 
@@ -236,14 +236,18 @@ def _analyze_islands(circuit, descriptors, nets, power, phenomena, diags):
     v_il, v_ih = 0.3 * vdd, 0.7 * vdd    # CMOS-ish forbidden band
 
     islands = find_islands(circuit, rails)
-    _analyze_gpio_drive(circuit, descriptors, islands, driven, phenomena, diags)
+    _analyze_gpio_drive(circuit, descriptors, islands, driven, phenomena, diags, cache)
     _analyze_supply(circuit, descriptors, power, phenomena, diags)
 
     for island in islands:
         if not island["internal_nets"]:
             continue
+        bnd = {n: driven[n] for n in sorted(island["boundary_nets"]) if n in driven}
+        key = cache.key("analog_island",
+                        {"parts": _island_sig(circuit, island), "boundary": bnd})
         try:
-            volts = solve_island(circuit, island, driven)
+            volts, hit = cache.get_or_compute(
+                key, lambda i=island: solve_island(circuit, i, driven))
         except Exception as exc:         # numerical / unsupported device — skip
             diags.append(Diagnostic(Severity.INFO,
                 f"analog island {sorted(island['parts'])} not solved: {exc}",
@@ -256,7 +260,8 @@ def _analyze_islands(circuit, descriptors, nets, power, phenomena, diags):
             tuple(sorted(island["parts"])),
             {"boundary": sorted(island["boundary_nets"])},
             {"voltages": {n: round(volts.get(n, 0.0), 4)
-                          for n in sorted(island["internal_nets"])}}))
+                          for n in sorted(island["internal_nets"])}},
+            cache_hit=hit))
 
         # indeterminate-logic check on any digital/i2c input sitting on an
         # internal node whose solved voltage lands in the forbidden band
@@ -274,7 +279,7 @@ def _analyze_islands(circuit, descriptors, nets, power, phenomena, diags):
                         parts=(ref,), pins=(pin,), nets=(net,)))
 
 
-def _analyze_gpio_drive(circuit, descriptors, islands, driven, phenomena, diags):
+def _analyze_gpio_drive(circuit, descriptors, islands, driven, phenomena, diags, cache):
     """Worst-case MCU GPIO drive current into each load island → over-current."""
     from core.mna_ic import mcu_output_pins, gpio_drive_current
 
@@ -287,16 +292,21 @@ def _analyze_gpio_drive(circuit, descriptors, islands, driven, phenomena, diags)
         isl = by_net.get(net)
         if isl is None:
             continue
+        bnd = {n: driven[n] for n in sorted(isl["boundary_nets"]) if n in driven}
+        key = cache.key("gpio_drive", {"island": _island_sig(circuit, isl),
+                                       "net": net, "voh": specs["voh"],
+                                       "rout": specs["rout"], "boundary": bnd})
         try:
-            i_a = gpio_drive_current(circuit, isl, net, specs["voh"],
-                                     specs["rout"], driven)
+            res, hit = cache.get_or_compute(key, lambda: {"i_a": gpio_drive_current(
+                circuit, isl, net, specs["voh"], specs["rout"], driven)})
+            i_a = res["i_a"]
         except Exception:
             continue
         i_ma = i_a * 1000.0
         phenomena.append(Phenomenon(
             "gpio_drive", "advanced", (net,), (ref,),
             {"pin": pin, "imax_ma": specs["imax_a"] * 1000.0},
-            {"i_ma": round(i_ma, 2)}))
+            {"i_ma": round(i_ma, 2)}, cache_hit=hit))
         if i_a > specs["imax_a"]:
             diags.append(Diagnostic(Severity.ERROR,
                 f"GPIO '{pin}' would source {i_ma:.0f} mA into '{net}' if driven "
@@ -321,6 +331,16 @@ def _analyze_supply(circuit, descriptors, power, phenomena, diags):
 
 
 # ── topology probes ───────────────────────────────────────────────────────────
+
+def _island_sig(circuit: dict, island: dict) -> list:
+    """Canonical, hashable signature of an island's topology + values."""
+    sig = []
+    for ref in sorted(island["parts"]):
+        p = circuit["parts"][ref]
+        sig.append([ref, p.get("type", ""), str(p.get("value", "")),
+                    dict(sorted((p.get("pins") or {}).items()))])
+    return sig
+
 
 def _value_def(circuit: dict, ref: str) -> dict:
     return circuit.get("parts", {}).get(ref, {})

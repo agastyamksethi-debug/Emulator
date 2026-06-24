@@ -330,6 +330,7 @@ class MainWindow(QMainWindow):
         self._circuit:    dict | None = None
         self._worker      = SimWorker()
         self._had_error   = False
+        self._analyzer_cache = None      # persistent characterization cache
 
         self._apply_palette()
         self._build_menu()
@@ -601,13 +602,19 @@ class MainWindow(QMainWindow):
         """Run the ERC / planner pass and surface results in Problems + overlays."""
         if self._circuit is None:
             return
-        from core.analyzer import analyze
+        from core.analyzer import analyze, CharacterizationCache
         from core.fidelity import CONFIG
+        if self._analyzer_cache is None:
+            path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+                                ".sim_cache", "characterization.json")
+            self._analyzer_cache = CharacterizationCache(path=path)
         try:
-            plan = analyze(self._circuit, advanced=CONFIG.is_advanced("real_world"))
+            plan = analyze(self._circuit, cache=self._analyzer_cache,
+                           advanced=CONFIG.is_advanced("real_world"))
         except Exception as exc:
             self.terminal.error(f"Analyzer failed: {exc}")
             return
+        self._analyzer_cache.flush()
         self.problems.set_diagnostics(plan.diagnostics)
         self.rw_canvas.set_diagnostics(plan.diagnostics)
         n_e, n_w = len(plan.errors()), len(plan.warnings())

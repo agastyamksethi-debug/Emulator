@@ -102,7 +102,8 @@ def build_devices(circuit: dict,
                 devices.append(Diode(ref, net_a, net_k, IS=IS, N=N, RS=RS))
 
         # ── BJT ───────────────────────────────────────────────────────────────
-        elif ptype in ("npn", "pnp", "bjt", "device:q_npn", "device:q_pnp"):
+        elif ptype in ("npn", "pnp", "bjt", "device:q_npn", "device:q_pnp",
+                       "transistor_npn", "transistor_pnp"):
             polarity = "PNP" if "pnp" in ptype else "NPN"
             params = {k: float(v) for k, v in part_def.items()
                       if k in ("IS","BF","NF","VAF","IKF","ISE","NE",

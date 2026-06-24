@@ -132,6 +132,22 @@ def test_supply_current_tally():
     assert abs(sup.result["current_ma"] - 83.9) < 0.1
 
 
+def test_transistor_stamps_into_mna():
+    from physics.mna import build_devices, BJT
+    sub = {"parts": {"Q1": {"type": "transistor_npn",
+                            "pins": {"B": "BASE", "C": "COLL", "E": "GND"}}}}
+    assert any(isinstance(d, BJT) for d in build_devices(sub, {}))
+
+
+def test_advanced_cache_reuses_mna_solves():
+    cache = CharacterizationCache()
+    analyze(_DIVIDER, cache=cache, advanced=True)
+    misses, hits = cache.misses, cache.hits
+    analyze(_DIVIDER, cache=cache, advanced=True)
+    assert cache.misses == misses     # island/gpio solves not recomputed
+    assert cache.hits > hits
+
+
 def test_cache_makes_reruns_free():
     cache = CharacterizationCache()
     analyze(_GOOD, cache)

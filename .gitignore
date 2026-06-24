@@ -34,3 +34,6 @@ schematic/uploads/
 
 # Runtime crash log (written by run_gui.py excepthook)
 crash.log
+
+# Characterization cache (analyzer memoization)
+.sim_cache/
