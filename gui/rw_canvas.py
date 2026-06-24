@@ -23,14 +23,14 @@ from PyQt6.QtWidgets import (
     QGraphicsScene, QGraphicsView, QGraphicsItem,
     QGraphicsEllipseItem, QGraphicsPathItem, QLabel, QInputDialog,
     QPushButton, QMenu, QGraphicsProxyWidget,
-    QComboBox, QDoubleSpinBox, QSpinBox,
+    QComboBox, QDoubleSpinBox, QSpinBox, QSlider,
 )
 from PyQt6.QtGui import (
     QPainter, QColor, QPen, QBrush, QPainterPath,
     QRadialGradient, QFont, QTransform,
 )
 from PyQt6.QtCore import (
-    Qt, QRectF, QPointF, pyqtSignal, QObject,
+    Qt, QRectF, QPointF, pyqtSignal, QObject, QTimer,
 )
 
 from core.rw_bus import RWBus
@@ -73,6 +73,14 @@ _COLOR_WAVELENGTH = {
     "blue":   470,
     "white":  580,   # broadband — use a nominal centre
 }
+
+# embedded slider stylesheet (Solarized Light)
+_SLIDER_CSS = (
+    "QSlider::groove:horizontal { height:4px; background:#D7CFB8; border-radius:2px; }"
+    "QSlider::handle:horizontal { width:10px; background:#FDF6E3;"
+    " border:1.5px solid #CB4B16; border-radius:5px; margin:-5px 0; }"
+    "QSlider::sub-page:horizontal { background:#CB4B16; border-radius:2px; }"
+)
 
 # embedded-control stylesheet (Solarized Light)
 _CTRL_CSS = (
@@ -937,6 +945,228 @@ class _LossNode(_BaseNode):
         painter.drawText(QRectF(W - 44, H - 26, 36, 12), Qt.AlignmentFlag.AlignRight, "OUT")
 
 
+# ── MPU-6050 IMU node (mini 3D orientation + motion sliders) ──────────────────
+
+class _Mpu3DView(QGraphicsItem):
+    """Interactive 3D board view — drag to rotate (trackball)."""
+    _H = 132
+
+    def __init__(self, node: "_MPUNode"):
+        super().__init__(node)
+        self._node = node
+        self._last = None
+        self.setAcceptedMouseButtons(Qt.MouseButton.LeftButton)
+        self.setCursor(Qt.CursorShape.OpenHandCursor)
+        self.setZValue(6)
+
+    def boundingRect(self) -> QRectF:
+        return QRectF(0, 0, self._node._W, self._H)
+
+    def paint(self, painter: QPainter, option, widget):
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        node = self._node
+        cx, cy = node._W / 2, self._H / 2
+        pts = node._project(cx, cy, 38)
+
+        # filled top face for orientation cueing
+        top = [pts[i] for i in node._TOP]
+        path = QPainterPath(QPointF(top[0][0], top[0][1]))
+        for q in top[1:]:
+            path.lineTo(q[0], q[1])
+        path.closeSubpath()
+        face = QColor(_ACCENT); face.setAlpha(60)
+        painter.setBrush(QBrush(face))
+        painter.setPen(QPen(_ACCENT, 1.2))
+        painter.drawPath(path)
+
+        # edges
+        painter.setBrush(Qt.BrushStyle.NoBrush)
+        painter.setPen(QPen(QColor(_TEXT_SEC), 1.2))
+        for a, b in node._EDGES:
+            painter.drawLine(QPointF(pts[a][0], pts[a][1]), QPointF(pts[b][0], pts[b][1]))
+
+        # +Z normal arrow (out of the board top)
+        nrm = node._rot([0, 0, 1.0],
+                        math.radians(node._roll + node._spin[0]),
+                        math.radians(node._pitch + node._spin[1]),
+                        math.radians(node._spin[2]))
+        nrm = node._rot(nrm, math.radians(-58), 0, 0)
+        painter.setPen(QPen(_ACCENT, 1.6))
+        painter.drawLine(QPointF(cx, cy), QPointF(cx + nrm[0] * 50, cy - nrm[1] * 50))
+
+    def mousePressEvent(self, ev):
+        self._last = ev.pos()
+        self.setCursor(Qt.CursorShape.ClosedHandCursor)
+        ev.accept()
+
+    def mouseMoveEvent(self, ev):
+        if self._last is not None:
+            d = ev.pos() - self._last
+            self._last = ev.pos()
+            self._node.rotate_drag(d.x(), d.y())
+        ev.accept()
+
+    def mouseReleaseEvent(self, ev):
+        self._last = None
+        self.setCursor(Qt.CursorShape.OpenHandCursor)
+        ev.accept()
+
+
+class _MPUNode(_BaseNode):
+    _W = 184
+    _H = 312
+
+    # slab (board) geometry and edges for the wireframe
+    _VERTS = [(-1, -0.72, -0.12), (1, -0.72, -0.12), (1, 0.72, -0.12), (-1, 0.72, -0.12),
+              (-1, -0.72,  0.12), (1, -0.72,  0.12), (1, 0.72,  0.12), (-1, 0.72,  0.12)]
+    _EDGES = [(0, 1), (1, 2), (2, 3), (3, 0), (4, 5), (5, 6), (6, 7), (7, 4),
+              (0, 4), (1, 5), (2, 6), (3, 7)]
+    _TOP = [4, 5, 6, 7]
+
+    def __init__(self, ref: str):
+        super().__init__(ref, "IMU")
+        self._pitch = 0.0
+        self._roll  = 0.0
+        self._gyro  = [0.0, 0.0, 0.0]     # °/s (slider values → sim)
+        self._spin  = [0.0, 0.0, 0.0]     # integrated visual spin (deg)
+        self._model = None
+        self._view = _Mpu3DView(self)
+        self._view.setPos(0, 30)
+        self._build_controls()
+
+        self._timer = QTimer()
+        self._timer.setInterval(33)        # ~30 fps
+        self._timer.timeout.connect(self._animate)
+        self._timer.start()
+
+    # ── controls ───────────────────────────────────────────────────────────────
+
+    def _slider(self, y: int, lo: int, hi: int, cb) -> QSlider:
+        s = QSlider(Qt.Orientation.Horizontal)
+        s.setRange(lo, hi)
+        s.setValue(0)
+        s.setStyleSheet(_SLIDER_CSS)
+        s.valueChanged.connect(cb)
+        p = QGraphicsProxyWidget(self)
+        p.setWidget(s)
+        p.setGeometry(QRectF(54, y, self._W - 66, 18))
+        return s
+
+    def _build_controls(self):
+        y0 = 170
+        self._row_y = y0
+        self._s_pitch = self._slider(y0,      -90, 90, self._on_pitch)
+        self._s_roll  = self._slider(y0 + 26, -90, 90, self._on_roll)
+        self._slider(y0 + 52,  -250, 250, lambda v: self._on_gyro(0, v))
+        self._slider(y0 + 78,  -250, 250, lambda v: self._on_gyro(1, v))
+        self._slider(y0 + 104, -250, 250, lambda v: self._on_gyro(2, v))
+
+    def bind_model(self, model):
+        self._model = model
+        self._push()
+
+    def _on_pitch(self, v): self._pitch = float(v); self._refresh()
+    def _on_roll(self, v):  self._roll  = float(v); self._refresh()
+    def _on_gyro(self, i, v):
+        self._gyro[i] = float(v); self._refresh()
+
+    def _refresh(self):
+        self._push()
+        self.update()
+        self._view.update()
+
+    def rotate_drag(self, dx: float, dy: float):
+        """Trackball drag → pitch/roll (synced to sliders, pushed to the model)."""
+        self._s_roll.setValue(int(round(max(-90, min(90, self._roll + dx * 0.6)))))
+        self._s_pitch.setValue(int(round(max(-90, min(90, self._pitch - dy * 0.6)))))
+
+    def _push(self):
+        """Send orientation→gravity vector and gyro rate to the sim model."""
+        if self._model is None:
+            return
+        pr = math.radians(self._pitch)
+        rr = math.radians(self._roll)
+        ax = -math.sin(pr)
+        ay = math.sin(rr) * math.cos(pr)
+        az = math.cos(rr) * math.cos(pr)
+        if hasattr(self._model, "set_acceleration"):
+            self._model.set_acceleration(ax, ay, az)
+        if hasattr(self._model, "set_rotation"):
+            self._model.set_rotation(*self._gyro)
+
+    def _animate(self):
+        moved = False
+        for i in range(3):
+            if self._gyro[i]:
+                self._spin[i] += self._gyro[i] * 0.033
+                moved = True
+        if moved:
+            self._view.update()
+
+    # ── 3D projection ───────────────────────────────────────────────────────────
+
+    @staticmethod
+    def _rot(p, ax, ay, az):
+        x, y, z = p
+        cx, sx = math.cos(ax), math.sin(ax)
+        y, z = y * cx - z * sx, y * sx + z * cx          # roll about X
+        cy, sy = math.cos(ay), math.sin(ay)
+        x, z = x * cy + z * sy, -x * sy + z * cy          # pitch about Y
+        cz, sz = math.cos(az), math.sin(az)
+        x, y = x * cz - y * sz, x * sz + y * cz          # yaw about Z
+        return [x, y, z]
+
+    def _project(self, cx, cy, scale):
+        roll  = math.radians(self._roll + self._spin[0])
+        pitch = math.radians(self._pitch + self._spin[1])
+        yaw   = math.radians(self._spin[2])
+        cam   = math.radians(-58)        # fixed look-down camera
+        pts = []
+        for v in self._VERTS:
+            p = self._rot(v, roll, pitch, yaw)
+            p = self._rot(p, cam, 0, 0)
+            pts.append((cx + p[0] * scale, cy - p[1] * scale, p[2]))
+        return pts
+
+    # ── paint ───────────────────────────────────────────────────────────────────
+
+    def paint(self, painter: QPainter, option, widget):
+        super().paint(painter, option, widget)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        W = self._W
+
+        # ref + badge
+        f_ref = QFont("Menlo,Consolas,Courier New,monospace", 8, QFont.Weight.Bold)
+        painter.setFont(f_ref)
+        painter.setPen(_TEXT_PRI)
+        painter.drawText(QRectF(12, 14, W - 52, 14), Qt.AlignmentFlag.AlignLeft, self.ref)
+        badge = QRectF(W - 44, 13, 32, 14)
+        painter.setBrush(QBrush(QColor("#FDF6E3")))
+        bdr = QColor(_ACCENT); bdr.setAlpha(160)
+        painter.setPen(QPen(bdr, 0.5)); painter.drawRoundedRect(badge, 6, 6)
+        painter.setFont(QFont("SF Pro Text,Helvetica,Arial,sans-serif", 7, QFont.Weight.Bold))
+        painter.setPen(_ACCENT)
+        painter.drawText(badge, Qt.AlignmentFlag.AlignCenter, "IMU")
+
+        # (the 3D board is drawn by the interactive _Mpu3DView child — drag to rotate)
+
+        # ── slider captions + values ──────────────────────────────────────────
+        painter.setFont(QFont("SF Pro Text,Helvetica,Arial,sans-serif", 7))
+        rows = [("PITCH", f"{int(self._pitch)}°"),
+                ("ROLL",  f"{int(self._roll)}°"),
+                ("GYR X", f"{int(self._gyro[0])}"),
+                ("GYR Y", f"{int(self._gyro[1])}"),
+                ("GYR Z", f"{int(self._gyro[2])}")]
+        for i, (cap, val) in enumerate(rows):
+            y = self._row_y + i * 26
+            painter.setPen(_TEXT_SEC)
+            painter.drawText(QRectF(8, y, 44, 18),
+                             Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter, cap)
+            painter.setPen(_TEXT_PRI)
+            painter.drawText(QRectF(W - 30, y, 24, 18),
+                             Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter, val)
+
+
 # ── scene (handles port-drag wiring) ─────────────────────────────────────────
 
 class _RWScene(QGraphicsScene):
@@ -1215,6 +1445,17 @@ class RWCanvas(QWidget):
         n = self._nodes.get(ref)
         return n if isinstance(n, _PotNode) else None
 
+    def add_mpu(self, ref: str, pos: tuple[float, float] = (0, 0)) -> _MPUNode:
+        node = _MPUNode(ref)
+        node.setPos(*pos)
+        self._scene.addItem(node)
+        self._nodes[ref] = node
+        return node
+
+    def get_mpu(self, ref: str) -> _MPUNode | None:
+        n = self._nodes.get(ref)
+        return n if isinstance(n, _MPUNode) else None
+
     def get_ldr(self, ref: str) -> _LDRNode | None:
         n = self._nodes.get(ref)
         return n if isinstance(n, _LDRNode) else None
@@ -1321,12 +1562,14 @@ class RWCanvas(QWidget):
         _BTN_TYPES  = {"button", "Device:SW_Push", "Device:SW_Push_Virtual"}
         _LDR_TYPES  = {"ldr", "photoresistor", "Device:R_Photo"}
         _POT_TYPES  = {"pot", "potentiometer", "Device:R_Potentiometer"}
+        _MPU_TYPES  = {"mpu6050", "imu", "Device:MPU6050"}
         _LOSS_TYPES = {"loss", "attenuator", "Device:Loss"}
 
         led_col  = 0
         btn_col  = 0
         ldr_col  = 0
         pot_col  = 0
+        mpu_col  = 0
         loss_col = 0
 
         for ref, part_def in circuit.get("parts", {}).items():
@@ -1359,6 +1602,11 @@ class RWCanvas(QWidget):
                 self.add_pot(ref, position=position, pos=(x, 140))
                 pot_col += 1
 
+            elif ptype in _MPU_TYPES:
+                x = mpu_col * 210 + 320
+                self.add_mpu(ref, pos=(x, -80))
+                mpu_col += 1
+
             elif ptype in _LOSS_TYPES:
                 loss_pct    = float(part_def.get("loss_pct", 30.0))
                 signal_type = part_def.get("signal", "light")
@@ -1390,6 +1638,10 @@ class RWCanvas(QWidget):
         pot_node = self.get_pot(ref)
         if pot_node is not None:
             pot_node.bind_model(node)
+
+        mpu_node = self.get_mpu(ref)
+        if mpu_node is not None:
+            mpu_node.bind_model(node)
 
     def update_sensor(self, ref: str, adc_value: int, light: float = 0.0):
         """Called by SimWorker to refresh a photoresistor's ADC reading display."""
