@@ -16,6 +16,8 @@ if TYPE_CHECKING:
 
 from physics.thermal import ThermalModel
 from physics.passive import PassiveModel
+from physics.runtime_mna import RuntimeMNA
+from core.fidelity import CONFIG
 
 
 class PhysicsEngine:
@@ -23,6 +25,8 @@ class PhysicsEngine:
         self.ambient_c = ambient_c
         self._thermal = ThermalModel(ambient_c)
         self._passive = PassiveModel()
+        self._rt_mna  = RuntimeMNA()
+        self._circuit: dict | None = None
         self._nodes: list[Node] = []
 
     def load(self, nodes: list[Node], netlist: NetList):
@@ -30,8 +34,14 @@ class PhysicsEngine:
         self._passive.load(netlist)
         self._thermal.load(nodes, netlist)
 
+    def set_circuit(self, circuit: dict):
+        """Provide the circuit dict so the runtime MNA tier can build devices."""
+        self._circuit = circuit
+
     def tick(self, dt_ms: float, gpio_bus: GPIOBus):
         self._passive.tick(dt_ms, gpio_bus)
+        if self._circuit is not None and CONFIG.is_advanced("electrical"):
+            self._rt_mna.solve_writeback(self._circuit, gpio_bus)
         self._thermal.tick(dt_ms, self._nodes)
 
     @property

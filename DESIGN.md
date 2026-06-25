@@ -91,6 +91,15 @@ by all layers. GUI draws pin halos / dashed-red nets / part badges + a Problems 
   and DC-solves the load island for worst-case GPIO current (over-current /
   near-limit flags, e.g. an LED with no series resistor), plus per-rail
   supply-current tally from `idd_ma`.
+- **Runtime MNA (done, opt-in `electrical` tier):** `physics/runtime_mna.py` solves
+  the real network each tick — externally driven nets (rails, firmware GPIO, sensor
+  outputs, cap junctions) are pinned as sources, the R/diode/LED interconnect is
+  stamped, and internal nodes are written back under the `_mna` driver. PassiveModel
+  releases its R/diode propagation in this tier (keeps power/thermal). Default Basic
+  to avoid regressions. **Known limitation:** the behavioural `LEDNode` brightness
+  heuristic assumes anode≈source, which the accurate node voltage breaks — so the
+  tier is best for analog/divider/sensor boards; LED brightness should run Basic
+  until `LEDNode` reads the diode's solved current instead.
 - **Phase 3 (next):** generic-IC output over-current (digital_out `i_max_ma`),
   transient/AC on islands, brown-out via rail source impedance, schematic/net
   overlay view, on-disk cache, runtime ±δ jitter on passives/rails.

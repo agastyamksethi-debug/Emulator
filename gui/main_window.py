@@ -104,6 +104,7 @@ class SimWorker(QThread):
 
             _nodes_list = list(runner.bus._nodes.values())
             runner.physics.load(_nodes_list, netlist)
+            runner.physics.set_circuit(circuit)
 
             for _ref, _node in runner.bus._nodes.items():
                 self.node_ready.emit(_ref, _node)
@@ -392,6 +393,13 @@ class MainWindow(QMainWindow):
         self._act_adc.toggled.connect(
             lambda on: self._set_fidelity("adc", on))
 
+        self._act_elec = QAction("Electrical — Runtime MNA", self, checkable=True)
+        self._act_elec.setChecked(CONFIG.electrical == Level.ADVANCED)
+        self._act_elec.setToolTip("Solve the real circuit each tick (dividers/loads). "
+                                  "Best for analog boards; LED brightness stays behavioural.")
+        self._act_elec.toggled.connect(
+            lambda on: self._set_fidelity("electrical", on))
+
         self._act_digital = QAction("Digital — Advanced", self, checkable=True)
         self._act_digital.setChecked(CONFIG.digital == Level.ADVANCED)
         self._act_digital.setEnabled(False)   # digital advanced not implemented
@@ -403,6 +411,7 @@ class MainWindow(QMainWindow):
 
         sim_menu.addAction(self._act_rw)
         sim_menu.addAction(self._act_adc)
+        sim_menu.addAction(self._act_elec)
         sim_menu.addAction(self._act_digital)
         sim_menu.addSeparator()
         sim_menu.addAction(self._act_auto)

@@ -86,6 +86,7 @@ class SimRunner:
         self._auto_instantiate(skip_refs=skip_refs)
         nodes = list(self.bus._nodes.values())
         self.physics.load(nodes, self._netlist)
+        self.physics.set_circuit(circuit)
 
     def _auto_instantiate(self, skip_refs: set[str] | None = None):
         """

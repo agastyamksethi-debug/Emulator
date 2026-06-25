@@ -413,6 +413,10 @@ class PassiveModel:
         """
         dt_s = dt_ms / 1000.0
         vmap = gpio_bus.voltages()
+        # in the runtime-MNA electrical tier the nodal solver owns R/diode node
+        # voltages; we only compute power here and release our propagation drivers
+        from core.fidelity import CONFIG
+        mna = CONFIG.is_advanced("electrical")
 
         for r in self.resistors:
             v_a = vmap.get(r.net_a, 0.0)
@@ -432,7 +436,10 @@ class PassiveModel:
             a_driven = _ext(r.net_a)
             b_driven = _ext(r.net_b)
 
-            if a_driven and not b_driven:
+            if mna:                       # MNA owns the node voltage
+                gpio_bus.release(r.net_b, key)
+                gpio_bus.release(r.net_a, key)
+            elif a_driven and not b_driven:
                 gpio_bus.drive(r.net_b, key, v_a)
             elif b_driven and not a_driven:
                 gpio_bus.drive(r.net_a, key, v_b)
@@ -472,7 +479,10 @@ class PassiveModel:
             ) or 10.0
 
             d.tick(v_a, v_k, r_series)
-            if d.conducting and d.net_cathode:
+            if mna:                       # MNA stamps the diode itself
+                if d.net_cathode:
+                    gpio_bus.release(d.net_cathode, f"_diode_{d.id}")
+            elif d.conducting and d.net_cathode:
                 gpio_bus.drive(d.net_cathode, f"_diode_{d.id}", d._cathode_voltage)
             elif d.net_cathode:
                 gpio_bus.release(d.net_cathode, f"_diode_{d.id}")

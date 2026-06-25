@@ -35,6 +35,7 @@ class SimConfig:
         # default: run the real-world / analog path advanced, digital basic
         self.real_world: Level = Level.ADVANCED
         self.adc:        Level = Level.ADVANCED
+        self.electrical: Level = Level.BASIC   # runtime MNA nodal solve (opt-in)
         self.digital:    Level = Level.BASIC
         self.auto:       bool  = False
 
