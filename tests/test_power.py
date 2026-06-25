@@ -59,6 +59,28 @@ def test_runtime_rail_sags_under_load():
         CONFIG.electrical = Level.BASIC
 
 
+def test_rail_ripple_light_in_advanced_clean_in_basic():
+    import statistics
+    circ = {"power": {"3V3": 3.3, "GND": 0.0}, "parts": {
+        "R1": {"type": "resistor", "value": "10k", "pins": {"1": "3V3", "2": "GND"}}}}
+
+    def samples(advanced):
+        CONFIG.real_world = Level.ADVANCED if advanced else Level.BASIC
+        try:
+            r = SimRunner(); r.load_circuit(circ)
+            out = []
+            for _ in range(40):
+                r.tick(1.0)
+                out.append(r.bus.gpio.voltage("3V3"))
+            return out
+        finally:
+            CONFIG.real_world = Level.ADVANCED
+
+    assert statistics.pstdev(samples(False)) == 0.0           # Basic: clean DC
+    sd = statistics.pstdev(samples(True))
+    assert 0.0005 < sd < 0.05, sd                             # Advanced: light ripple
+
+
 if __name__ == "__main__":
     fails = 0
     for name, fn in sorted(globals().items()):

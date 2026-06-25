@@ -39,10 +39,21 @@ class PhysicsEngine:
         self._circuit = circuit
 
     def tick(self, dt_ms: float, gpio_bus: GPIOBus):
+        self._apply_rail_ripple(gpio_bus)
         self._passive.tick(dt_ms, gpio_bus)
         if self._circuit is not None and CONFIG.is_advanced("electrical"):
             self._rt_mna.solve_writeback(self._circuit, gpio_bus, self._nodes)
         self._thermal.tick(dt_ms, self._nodes)
+
+    def _apply_rail_ripple(self, gpio_bus):
+        """Light, realistic supply ripple (~0.15%) on each rail — zero in Basic."""
+        if self._circuit is None:
+            return
+        from core.power import parse_power
+        from core.fidelity import sensor_noise
+        for net, (v, _r) in parse_power(self._circuit).items():
+            if v > 0:
+                gpio_bus.drive(net, "_pwr", v + sensor_noise(0.0015 * v))
 
     @property
     def passive(self) -> PassiveModel:

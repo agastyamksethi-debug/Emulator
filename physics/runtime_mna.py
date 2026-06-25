@@ -51,10 +51,13 @@ class RuntimeMNA:
             if vals:
                 driven[net] = min(vals)
 
-        # 3. build + solve the network (sources pinned, rails behind impedance)
+        # 3. build + solve the network (sources pinned, rails behind impedance,
+        #    using the live rippled rail voltage from the bus)
         try:
+            rail_v = {net: ns._drivers.get("_pwr", rails[net][0])
+                      for net in rails if (ns := gpio._nets.get(net))}
             devices = build_devices(circuit, driven)
-            devices += rail_source_devices(circuit)
+            devices += rail_source_devices(circuit, rail_v)
             solver = MNASolver()
             solver.load(devices)
             volts = solver.solve_dc()

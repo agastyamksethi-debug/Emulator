@@ -41,13 +41,17 @@ def voltages(circuit: dict) -> dict[str, float]:
     return {net: v for net, (v, _r) in parse_power(circuit).items()}
 
 
-def rail_source_devices(circuit: dict):
-    """MNA devices modelling each rail as VSource(v) behind its source impedance."""
+def rail_source_devices(circuit: dict, rail_v: dict | None = None):
+    """MNA devices modelling each rail as VSource(v) behind its source impedance.
+
+    `rail_v` optionally overrides the nominal voltage per rail (e.g. the live,
+    rippled value from the bus) so ripple flows through the solve."""
     from physics.mna import VSource, Resistor
     devs = []
-    for net, (v, r) in parse_power(circuit).items():
+    for net, (v0, r) in parse_power(circuit).items():
         if net in _GND_NETS:
             continue
+        v = rail_v.get(net, v0) if rail_v else v0
         if r > 0:
             src = f"_railsrc_{net}"
             devs.append(VSource(f"_railvs_{net}", v, net_pos=src, net_neg="GND"))
