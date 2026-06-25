@@ -1167,6 +1167,109 @@ class _MPUNode(_BaseNode):
                              Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter, val)
 
 
+# ── generic sensor node (slider/toggle that drives the sim model live) ────────
+
+# type → (badge, (label, kind, lo, hi, setter, unit, scale))
+_SENSOR_SPECS = {
+    "tmp36":        ("TMP",  ("Temp",   "slider", -20, 80,  "set_temperature", "°C", 1.0)),
+    "ntc":          ("NTC",  ("Temp",   "slider", -20, 120, "set_temperature", "°C", 1.0)),
+    "thermistor":   ("NTC",  ("Temp",   "slider", -20, 120, "set_temperature", "°C", 1.0)),
+    "photodiode":   ("PD",   ("Light",  "slider", 0, 100,   "set_light",  "%", 0.01)),
+    "ir_receiver":  ("IR",   ("IR",     "slider", 0, 100,   "set_ir",     "%", 0.01)),
+    "microphone":   ("MIC",  ("Sound",  "slider", 0, 100,   "set_sound",  "%", 0.01)),
+    "sound_sensor": ("MIC",  ("Sound",  "slider", 0, 100,   "set_sound",  "%", 0.01)),
+    "hall":         ("HALL", ("Field",  "slider", -100, 100, "set_field", "%", 0.01)),
+    "fsr":          ("FSR",  ("Force",  "slider", 0, 100,   "set_force",  "%", 0.01)),
+    "pir":          ("PIR",  ("Motion", "toggle", 0, 1,     "set_motion", "",  1.0)),
+}
+
+
+class _SensorNode(_BaseNode):
+    _W = 156
+    _H = 150
+
+    def __init__(self, ref: str, badge: str, row: tuple):
+        super().__init__(ref, badge)
+        self._badge = badge
+        (self._label, self._kind, self._lo, self._hi,
+         self._setter, self._unit, self._scale) = row
+        self._value   = 0.0
+        self._reading = 0
+        self._model   = None
+        self._build_controls()
+
+    def _build_controls(self):
+        if self._kind == "toggle":
+            btn = QPushButton("Trigger")
+            btn.setStyleSheet(
+                "QPushButton { background:#CB4B16; color:#fff; border:none;"
+                " border-radius:4px; padding:4px; font-size:11px; }"
+                "QPushButton:hover { background:#B45309; }")
+            btn.clicked.connect(self._on_trigger)
+            p = QGraphicsProxyWidget(self); p.setWidget(btn)
+            p.setGeometry(QRectF(22, 92, self._W - 44, 26))
+        else:
+            s = QSlider(Qt.Orientation.Horizontal)
+            s.setRange(self._lo, self._hi)
+            s.setValue(0 if self._lo < 0 else self._lo)
+            s.setStyleSheet(_SLIDER_CSS)
+            s.valueChanged.connect(self._on_slider)
+            self._value = float(s.value())
+            p = QGraphicsProxyWidget(self); p.setWidget(s)
+            p.setGeometry(QRectF(14, 96, self._W - 28, 18))
+
+    def bind_model(self, model):
+        self._model = model
+        self._apply()
+
+    def _on_slider(self, v):
+        self._value = float(v); self._apply(); self.update()
+
+    def _on_trigger(self):
+        if self._model is not None and hasattr(self._model, self._setter):
+            getattr(self._model, self._setter)(True)
+        self.update()
+
+    def _apply(self):
+        if (self._kind != "toggle" and self._model is not None
+                and hasattr(self._model, self._setter)):
+            getattr(self._model, self._setter)(self._value * self._scale)
+
+    def update_reading(self, adc_value: int, light: float = 0.0):
+        self._reading = int(adc_value); self.update()
+
+    def paint(self, painter: QPainter, option, widget):
+        super().paint(painter, option, widget)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        W = self._W
+        painter.setFont(QFont("Menlo,Consolas,Courier New,monospace", 8, QFont.Weight.Bold))
+        painter.setPen(_TEXT_PRI)
+        painter.drawText(QRectF(12, 14, W - 52, 14), Qt.AlignmentFlag.AlignLeft, self.ref)
+        badge = QRectF(W - 46, 13, 34, 14)
+        painter.setBrush(QBrush(QColor("#FDF6E3")))
+        bdr = QColor(_ACCENT); bdr.setAlpha(160)
+        painter.setPen(QPen(bdr, 0.5)); painter.drawRoundedRect(badge, 6, 6)
+        painter.setFont(QFont("SF Pro Text,Helvetica,Arial,sans-serif", 7, QFont.Weight.Bold))
+        painter.setPen(_ACCENT)
+        painter.drawText(badge, Qt.AlignmentFlag.AlignCenter, self._badge)
+
+        painter.setFont(QFont("SF Pro Text,Helvetica,Arial,sans-serif", 19, QFont.Weight.Bold))
+        painter.setPen(_TEXT_PRI)
+        val = self._label.upper() if self._kind == "toggle" else f"{int(self._value)}{self._unit}"
+        painter.drawText(QRectF(0, 36, W, 30), Qt.AlignmentFlag.AlignCenter, val)
+        painter.setFont(QFont("SF Pro Text,Helvetica,Arial,sans-serif", 7))
+        painter.setPen(_TEXT_SEC)
+        painter.drawText(QRectF(0, 70, W, 12), Qt.AlignmentFlag.AlignCenter, self._label.upper())
+
+        pill = QRectF(W / 2 - 42, self._H - 30, 84, 18)
+        painter.setBrush(QBrush(QColor("#FDF6E3")))
+        b2 = QColor(_ACCENT); b2.setAlpha(110)
+        painter.setPen(QPen(b2, 0.5)); painter.drawRoundedRect(pill, 9, 9)
+        painter.setFont(QFont("Menlo,Consolas,Courier New,monospace", 8, QFont.Weight.Bold))
+        painter.setPen(_ACCENT)
+        painter.drawText(pill, Qt.AlignmentFlag.AlignCenter, f"ADC {self._reading}")
+
+
 # ── scene (handles port-drag wiring) ─────────────────────────────────────────
 
 class _RWScene(QGraphicsScene):
@@ -1456,6 +1559,19 @@ class RWCanvas(QWidget):
         n = self._nodes.get(ref)
         return n if isinstance(n, _MPUNode) else None
 
+    def add_sensor(self, ref: str, ptype: str,
+                   pos: tuple[float, float] = (0, 0)) -> _SensorNode:
+        badge, row = _SENSOR_SPECS[ptype]
+        node = _SensorNode(ref, badge, row)
+        node.setPos(*pos)
+        self._scene.addItem(node)
+        self._nodes[ref] = node
+        return node
+
+    def get_sensor(self, ref: str) -> _SensorNode | None:
+        n = self._nodes.get(ref)
+        return n if isinstance(n, _SensorNode) else None
+
     def get_ldr(self, ref: str) -> _LDRNode | None:
         n = self._nodes.get(ref)
         return n if isinstance(n, _LDRNode) else None
@@ -1565,12 +1681,13 @@ class RWCanvas(QWidget):
         _MPU_TYPES  = {"mpu6050", "imu", "Device:MPU6050"}
         _LOSS_TYPES = {"loss", "attenuator", "Device:Loss"}
 
-        led_col  = 0
-        btn_col  = 0
-        ldr_col  = 0
-        pot_col  = 0
-        mpu_col  = 0
-        loss_col = 0
+        led_col    = 0
+        btn_col    = 0
+        ldr_col    = 0
+        pot_col    = 0
+        mpu_col    = 0
+        sensor_col = 0
+        loss_col   = 0
 
         for ref, part_def in circuit.get("parts", {}).items():
             ptype = part_def.get("type", "")
@@ -1606,6 +1723,11 @@ class RWCanvas(QWidget):
                 x = mpu_col * 210 + 320
                 self.add_mpu(ref, pos=(x, -80))
                 mpu_col += 1
+
+            elif ptype in _SENSOR_SPECS:
+                x = sensor_col * 170 - 200
+                self.add_sensor(ref, ptype, pos=(x, 360))
+                sensor_col += 1
 
             elif ptype in _LOSS_TYPES:
                 loss_pct    = float(part_def.get("loss_pct", 30.0))
@@ -1643,11 +1765,19 @@ class RWCanvas(QWidget):
         if mpu_node is not None:
             mpu_node.bind_model(node)
 
+        sensor_node = self.get_sensor(ref)
+        if sensor_node is not None:
+            sensor_node.bind_model(node)
+
     def update_sensor(self, ref: str, adc_value: int, light: float = 0.0):
-        """Called by SimWorker to refresh a photoresistor's ADC reading display."""
+        """Called by SimWorker to refresh a sensor's live ADC reading display."""
         ldr_node = self.get_ldr(ref)
         if ldr_node is not None:
             ldr_node.update_reading(adc_value, light)
+            return
+        sensor_node = self.get_sensor(ref)
+        if sensor_node is not None:
+            sensor_node.update_reading(adc_value, light)
 
     # ── ERC diagnostics overlay (Layer 4) ──────────────────────────────────────
 

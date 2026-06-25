@@ -157,9 +157,9 @@ class SimWorker(QThread):
                         if _led_prev.get(_ref) != (_on, _br):
                             _led_prev[_ref] = (_on, _br)
                             self.led_update.emit(_ref, _on, _br)
-                    elif hasattr(_node, "v_out") and hasattr(_node, "light"):
+                    elif hasattr(_node, "v_out"):
                         _adc = max(0, min(4095, int(_node.v_out / v_sup * 4095)))
-                        self.sensor_update.emit(_ref, _adc, float(_node.light))
+                        self.sensor_update.emit(_ref, _adc, float(getattr(_node, "light", 0.0)))
 
             fw.stop()
             self._fw = None
