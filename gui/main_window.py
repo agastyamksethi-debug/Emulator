@@ -89,16 +89,18 @@ class SimWorker(QThread):
             circuit = self._circuit
             netlist = to_netlist(circuit)
 
+            from core.power import voltages as _rail_v
+            _pv = _rail_v(circuit)
             runner = SimRunner(
-                v_supply  = max(circuit.get("power", {}).values(), default=3.3),
+                v_supply  = max(_pv.values(), default=3.3),
                 ambient_c = 25.0,
             )
             runner._netlist = netlist
             self._runner = runner
             runner.bus.load_netlist(netlist)
 
-            for net, v in circuit.get("power", {}).items():
-                runner.bus.gpio.drive(net, "_pwr", float(v))
+            for net, v in _pv.items():
+                runner.bus.gpio.drive(net, "_pwr", v)
 
             runner._auto_instantiate()
 
@@ -111,8 +113,7 @@ class SimWorker(QThread):
 
             mcu_ref = find_mcu(circuit)
             pin_map = mcu_pinmap(circuit, mcu_ref) if mcu_ref else {}
-            v_sup   = circuit.get("power", {}).get("3V3",
-                      circuit.get("power", {}).get("5V", 3.3))
+            v_sup   = _pv.get("3V3", _pv.get("5V", 3.3))
 
             fw = CppFirmware(
                 binary,

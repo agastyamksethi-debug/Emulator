@@ -1,0 +1,48 @@
+{
+  "mcu": "U1",
+
+  "power": {
+    "3V3": 3.3,
+    "GND": 0.0
+  },
+
+  "parts": {
+    "U1": {
+      "type": "esp32-wroom-32",
+      "pins": {
+        "VDD":     "3V3",
+        "GND_1":   "GND",
+        "CHIP_EN": "3V3",
+        "IO21":    "SDA",
+        "IO22":    "SCL",
+        "IO2":     "LED_A"
+      }
+    },
+
+    "IMU1": {
+      "type": "mpu6050",
+      "pins": {
+        "VCC": "3V3",
+        "GND": "GND",
+        "SDA": "SDA",
+        "SCL": "SCL",
+        "AD0": "GND"
+      }
+    },
+
+    "R1": { "type": "resistor", "value": "4.7k", "pins": { "1": "3V3", "2": "SDA" } },
+    "R2": { "type": "resistor", "value": "4.7k", "pins": { "1": "3V3", "2": "SCL" } },
+    "R3": { "type": "resistor", "value": "220",  "pins": { "1": "LED_A", "2": "LED_K" } },
+
+    "D1": {
+      "type": "led",
+      "color": "red",
+      "vf": 2.0,
+      "if_ma": 20,
+      "series_r": 220,
+      "pins": { "A": "LED_K", "K": "GND" }
+    },
+
+    "C1": { "type": "capacitor", "value": "100n", "pins": { "1": "3V3", "2": "GND" } }
+  }
+}

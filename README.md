@@ -43,8 +43,14 @@ In the Advanced `electrical` tier, the live sim solves the actual circuit each t
 with a SPICE-style MNA solver (`physics/mna/`): driven nets (rails, firmware GPIO,
 sensor outputs, cap junctions) are pinned as sources, the R/diode/LED interconnect is
 stamped, and internal nodes are solved — so a divider reads its true 1.65 V instead of
-the behavioral approximation. *Opt-in (default Basic).* See the limitation in
-[DESIGN.md](DESIGN.md).
+the behavioral approximation. *Opt-in (default Basic).* See [DESIGN.md](DESIGN.md).
+
+### Power rails (`core/power.py`)
+Rails are **not** ideal — each has a Thévenin source impedance (default 0.1 Ω;
+override per rail with `"3V3": {"v": 3.3, "r_src": 0.5}`). Heavy/shorted loads sag
+the rail (in the runtime MNA and in the analyzer's loaded-rail solve), and a VCC that
+drops below a part's `v_min` is flagged as `erc.brownout`. Stable by default, never
+infinitely perfect.
 
 ## Pre-production analyzer / ERC (`core/analyzer.py`)
 A static "compile" pass (also runs on load/Run in the GUI → **Problems** panel)
@@ -61,6 +67,7 @@ identifies electrically-significant phenomena and flags faults:
 | `erc.output_short` / `erc.gpio_short` | an output driven onto a power rail |
 | `erc.contention` | multiple push-pull outputs on one net |
 | `erc.i2c_collision` | two devices at the same I2C address |
+| `erc.brownout` | rail sags below a part's V_min under load (source impedance) |
 
 Results are also tolerance-cornered and **memoized** (`CharacterizationCache`,
 on-disk `.sim_cache/`) so re-analysis of an unchanged board is free. Metadata lives in

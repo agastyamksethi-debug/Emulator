@@ -123,9 +123,10 @@ def _build_nets(circuit: dict, descriptors: dict) -> dict[str, list[tuple]]:
 
 def analyze(circuit: dict, cache: CharacterizationCache | None = None,
             advanced: bool = False) -> SimPlan:
+    from core.power import voltages
     cache = cache or CharacterizationCache()
     descriptors = {ref: _load_descriptor(p) for ref, p in circuit.get("parts", {}).items()}
-    power = circuit.get("power", {})                 # net -> voltage
+    power = voltages(circuit)                         # net -> nominal voltage
     nets = _build_nets(circuit, descriptors)
     diags: list[Diagnostic] = []
     phenomena: list[Phenomenon] = []
@@ -209,6 +210,8 @@ def analyze(circuit: dict, cache: CharacterizationCache | None = None,
             diags.append(Diagnostic(Severity.ERROR,
                 f"I2C address 0x{a:02X} is shared by {', '.join(sorted(refs))}",
                 code="erc.i2c_collision", parts=tuple(sorted(refs))))
+
+    _erc_brownout(circuit, descriptors, nets, phenomena, diags)
 
     # ---- ERC + phenomenon: I2C / open-drain buses -------------------------------
     seen_bus: set[str] = set()
@@ -358,6 +361,44 @@ def _analyze_gpio_drive(circuit, descriptors, islands, driven, phenomena, diags,
                 f"GPIO '{pin}' would source {i_ma:.0f} mA into '{net}' — near the "
                 f"{specs['imax_a']*1000:.0f} mA pin limit",
                 code="erc.gpio_highcurrent", parts=(ref,), pins=(pin,), nets=(net,)))
+
+
+def _erc_brownout(circuit, descriptors, nets, phenomena, diags):
+    """Solve the rails under their static load (source impedance + idd + passive
+    loads) and flag any powered pin whose rail sags below its minimum."""
+    from core.power import solve_loaded_rails, parse_power
+
+    rails = parse_power(circuit)
+    if not any(r > 0 for _v, r in rails.values()):
+        return
+    try:
+        solved = solve_loaded_rails(circuit, descriptors)
+    except Exception:
+        return
+
+    # report each rail's loaded voltage, and flag brown-outs
+    for net, (vnom, r) in rails.items():
+        if r <= 0:
+            continue
+        vact = solved.get(net, vnom)
+        sag = vnom - vact
+        phenomena.append(Phenomenon("rail_load", "intermediate", (net,), (),
+                                    {"v_nom": vnom, "r_src": r},
+                                    {"v_loaded": round(vact, 3),
+                                     "sag_mv": round(sag * 1000, 1)}))
+
+    for ref, pdef in circuit.get("parts", {}).items():
+        contracts = load_pin_contracts(descriptors[ref])
+        for pin, net in (pdef.get("pins") or {}).items():
+            c = contracts.get(pin)
+            if (c and c.role == PinRole.POWER_IN and c.v_min is not None
+                    and net in rails and rails[net][1] > 0):
+                vact = solved.get(net, rails[net][0])
+                if vact < c.v_min:
+                    diags.append(Diagnostic(Severity.ERROR,
+                        f"rail '{net}' sags to {vact:.2f} V under load — below "
+                        f"{ref}'s {c.v_min} V minimum (brown-out)",
+                        code="erc.brownout", parts=(ref,), pins=(pin,), nets=(net,)))
 
 
 def _analyze_supply(circuit, descriptors, power, phenomena, diags):

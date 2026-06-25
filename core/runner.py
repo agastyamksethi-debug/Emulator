@@ -80,8 +80,9 @@ class SimRunner:
         self.bus.load_netlist(self._netlist)
 
         # Drive explicit power rails (overrides the bus's auto-detected names)
-        for net_name, voltage in circuit.get("power", {}).items():
-            self.bus.gpio.drive(net_name, "_pwr", float(voltage))
+        from core.power import voltages
+        for net_name, voltage in voltages(circuit).items():
+            self.bus.gpio.drive(net_name, "_pwr", voltage)
 
         self._auto_instantiate(skip_refs=skip_refs)
         nodes = list(self.bus._nodes.values())

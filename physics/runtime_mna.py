@@ -36,21 +36,25 @@ class RuntimeMNA:
         for ns in gpio._nets.values():
             ns._drivers.pop("_mna", None)
 
+        from core.power import parse_power, rail_source_devices
+        rails = parse_power(circuit)        # net -> (v, r_src)
+
         # 2. snapshot external sources (lowest-wins, like the bus), excl. ground
+        #    and excl. rails — those are modelled with their source impedance so
+        #    they sag under load instead of being pinned ideal.
         driven: dict[str, float] = {}
         for net, ns in gpio._nets.items():
-            if net in _GND_NETS:
+            if net in _GND_NETS or net in rails:
                 continue
             vals = [v for k, v in ns._drivers.items()
                     if not k.startswith(_SKIP_PREFIXES)]
             if vals:
                 driven[net] = min(vals)
-        if not driven:
-            return
 
-        # 3. build + solve the network (sources pinned, interconnect stamped)
+        # 3. build + solve the network (sources pinned, rails behind impedance)
         try:
             devices = build_devices(circuit, driven)
+            devices += rail_source_devices(circuit)
             solver = MNASolver()
             solver.load(devices)
             volts = solver.solve_dc()

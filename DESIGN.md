@@ -99,9 +99,15 @@ by all layers. GUI draws pin halos / dashed-red nets / part badges + a Problems 
   to avoid regressions. LEDs read their MNA-solved current (the diode's bulk
   resistance no longer double-counts the external series resistor), so brightness
   matches Basic while the anode voltage is now physically correct.
+- **Power-rail stability (done):** `core/power.py` gives every rail a Thévenin
+  source impedance (default 0.1 Ω; per-rail `{"v":…,"r_src":…}` override). The
+  runtime MNA models rails behind that impedance (they sag under load), and the
+  analyzer solves the loaded rails (idd + passive draw) → `rail_load` phenomenon
+  + `erc.brownout` when a part's VCC sags below its `v_min`. Stable by default,
+  never infinitely perfect.
 - **Phase 3 (next):** generic-IC output over-current (digital_out `i_max_ma`),
-  transient/AC on islands, brown-out via rail source impedance, schematic/net
-  overlay view, on-disk cache, runtime ±δ jitter on passives/rails.
+  transient/AC on islands, schematic/net overlay view, runtime ±δ jitter on
+  passives/rails.
 
 ## Prerequisites / risks
 - Metadata coverage is the gate — the planner is only as good as the contracts.
