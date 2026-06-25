@@ -130,6 +130,10 @@ class CppFirmware:
         # Serial receive buffer — bytes pushed from GUI, consumed by SER_AVAIL/SER_READ
         self._serial_in_buf:  deque[int]     = deque()
         self._serial_in_lock: threading.Lock = threading.Lock()
+        # External-interrupt state (attachInterrupt → IATT/IDET, serviced via IPOLL)
+        self._isr_modes:   dict[int, int] = {}   # pin → mode (1 RISING, 2 FALLING, 3 CHANGE)
+        self._isr_prev:    dict[int, int] = {}   # pin → last digital level
+        self._isr_pending: deque[int]     = deque()
 
     def inject_serial(self, text: str):
         """Thread-safe — push text (+ newline) into the firmware's Serial receive buffer."""
@@ -140,6 +144,9 @@ class CppFirmware:
     def attach(self, bus, runner):
         self._bus    = bus
         self._runner = runner
+        # scan interrupt pins every sim tick so intra-interval edges aren't missed
+        if runner is not None and hasattr(runner, "on_tick"):
+            runner.on_tick(lambda _ms: self.scan_interrupts())
 
     # ─────────────────────────────────────────── low-level IPC ───────────────
 
@@ -275,6 +282,25 @@ class CppFirmware:
                 data = self._bus.i2c_read(addr, 0, length)
             self._send(data.hex().upper())
 
+        elif op == "IATT":
+            pin_s, _, mode_s = rest.partition(" ")
+            pin = int(pin_s)
+            self._isr_modes[pin] = int(mode_s) if mode_s.strip() else 3
+            net = self.pin_map.get(pin)
+            self._isr_prev[pin] = (self._bus.gpio.digital(net)
+                                   if net and self._bus else 0)
+            self._send("OK")
+
+        elif op == "IDET":
+            pin = int(rest)
+            self._isr_modes.pop(pin, None)
+            self._isr_prev.pop(pin, None)
+            self._send("OK")
+
+        elif op == "IPOLL":
+            self._send(str(self._isr_pending.popleft())
+                       if self._isr_pending else "-1")
+
         elif op == "MILLIS":
             t = int(self._runner.elapsed_ms) if self._runner else 0
             self._send(str(t))
@@ -293,6 +319,28 @@ class CppFirmware:
             else:
                 print(rest, flush=True)
             self._send("OK")
+
+    def scan_interrupts(self):
+        """
+        Detect edges on attached-interrupt pins and queue fired ISRs.
+
+        Call after each simulation advance and before unblocking the firmware's
+        delay(); the firmware drains the queue via IPOLL.
+        """
+        if not self._bus or not self._isr_modes:
+            return
+        for pin, mode in self._isr_modes.items():
+            net = self.pin_map.get(pin)
+            if not net:
+                continue
+            cur = self._bus.gpio.digital(net)
+            prev = self._isr_prev.get(pin, cur)
+            fired = ((mode == 1 and prev == 0 and cur == 1) or   # RISING
+                     (mode == 2 and prev == 1 and cur == 0) or   # FALLING
+                     (mode == 3 and cur != prev))                # CHANGE
+            if fired:
+                self._isr_pending.append(pin)
+            self._isr_prev[pin] = cur
 
     def _read_until_delay(self) -> float:
         """
@@ -355,6 +403,7 @@ class CppFirmware:
             # Advance the rest of the simulation (physics, LED nodes, etc.)
             if self._runner:
                 self._runner.run(duration_ms=delay_ms)
+            self.scan_interrupts()        # queue any fired ISRs before unblocking
             # Unblock the C++ so it continues from after delay()
             self._send("OK")
             remaining -= delay_ms

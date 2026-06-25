@@ -42,6 +42,10 @@
 #define HEX 16
 #define OCT 8
 #define BIN 2
+#define RISING  1
+#define FALLING 2
+#define CHANGE  3
+#define IRAM_ATTR
 #define LED_BUILTIN   2
 #define A0  36
 #define A1  37
@@ -146,12 +150,49 @@ inline void ledcDetachPin(int pin) {
     _sim_recv_ok();
 }
 
+// ── External interrupts ──────────────────────────────────────────────────────
+// ISRs run cooperatively: Python queues fired pins as the sim advances; the
+// firmware drains them at each delay() (the safe service point).
+typedef void (*_isr_fn)(void);
+static _isr_fn _isr_table[48] = {0};
+
+inline int digitalPinToInterrupt(int pin) { return pin; }
+
+inline void attachInterrupt(int pin, _isr_fn isr, int mode) {
+    if (pin >= 0 && pin < 48) _isr_table[pin] = isr;
+    char msg[32];
+    snprintf(msg, sizeof(msg), "IATT %d %d", pin, mode);
+    _sim_writeln(msg);
+    _sim_recv_ok();
+}
+
+inline void detachInterrupt(int pin) {
+    if (pin >= 0 && pin < 48) _isr_table[pin] = 0;
+    char msg[32];
+    snprintf(msg, sizeof(msg), "IDET %d", pin);
+    _sim_writeln(msg);
+    _sim_recv_ok();
+}
+
+inline void interrupts(void)   {}
+inline void noInterrupts(void) {}
+
+static inline void _sim_service_isr(void) {
+    for (;;) {
+        _sim_writeln("IPOLL");
+        int pin = _sim_recv_int();
+        if (pin < 0) break;
+        if (pin < 48 && _isr_table[pin]) _isr_table[pin]();
+    }
+}
+
 // ── Timing ───────────────────────────────────────────────────────────────────
 inline void delay(unsigned long ms) {
     char msg[32];
     snprintf(msg, sizeof(msg), "DELAY %lu", ms);
     _sim_writeln(msg);
     _sim_recv_ok();
+    _sim_service_isr();
 }
 
 inline void delayMicroseconds(unsigned long us) {

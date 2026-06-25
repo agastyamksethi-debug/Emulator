@@ -52,6 +52,9 @@ class MPU6050Node(Node):
     def __init__(self, instance_id: str, descriptor: dict):
         super().__init__(instance_id, descriptor)
         self.i2c_address: int = int(descriptor.get("i2c_address", 0x68))
+        pins = descriptor.get("pins", {})
+        _int = pins.get("INT")     # a net name only if wired in the circuit
+        self._net_int: str = _int if isinstance(_int, str) and _int else ""
 
         # stored/config registers
         self._regs = bytearray(128)
@@ -61,6 +64,9 @@ class MPU6050Node(Node):
         self._accel = [0.0, 0.0, 1.0]   # g  (gravity on +Z at rest)
         self._gyro  = [0.0, 0.0, 0.0]   # °/s
         self._temp  = 25.0              # °C
+
+        self._bus = None
+        self._data_ready = False        # drives the INT pin (DATA_RDY_EN)
 
         self._init_regs()
 
@@ -86,6 +92,27 @@ class MPU6050Node(Node):
     @property
     def asleep(self) -> bool:
         return bool(self._regs[_PWR_MGMT_1] & 0x40)
+
+    # ── INT pin (data-ready) ────────────────────────────────────────────────────
+
+    def attach_bus(self, bus):
+        self._bus = bus
+
+    def tick(self, dt_ms: float):
+        """Drive the INT line when DATA_RDY (INT_ENABLE bit0) is enabled.
+
+        Order matters: assert from the *previous* sample's ready flag, then mark
+        a fresh sample.  A read clears the flag, so the line drops then re-rises —
+        one clean edge per read cycle (latched until read otherwise)."""
+        if not self._bus or not self._net_int:
+            return
+        v_sup = getattr(self._bus, "v_supply", 3.3)
+        active = (not self.asleep
+                  and bool(self._regs[0x38] & 0x01)   # INT_ENABLE.DATA_RDY_EN
+                  and self._data_ready)
+        self._bus.gpio.drive(self._net_int, self.id, v_sup if active else 0.0)
+        if not self.asleep:
+            self._data_ready = True
 
     # ── live sensor register block (0x3B … 0x48) ────────────────────────────────
 
@@ -129,6 +156,10 @@ class MPU6050Node(Node):
     def i2c_read(self, address: int, register: int, length: int) -> bytes:
         start = (register & 0x7F) if register else self._ptr
         out = bytearray(self._read_reg((start + i) & 0x7F) for i in range(length))
+        # reading INT_STATUS (0x3A) or the measurement block (0x3B–0x48) clears
+        # the data-ready latch → INT de-asserts until the next sample
+        if any(0x3A <= (start + i) & 0x7F <= 0x48 for i in range(length)):
+            self._data_ready = False
         self._ptr = (start + length) & 0x7F
         return bytes(out)
 
@@ -137,6 +168,9 @@ class MPU6050Node(Node):
         self._accel = [0.0, 0.0, 1.0]
         self._gyro  = [0.0, 0.0, 0.0]
         self._temp  = 25.0
+        self._data_ready = False
+        if self._bus and self._net_int:
+            self._bus.gpio.release(self._net_int, self.id)
 
 
 # ── registration ──────────────────────────────────────────────────────────────

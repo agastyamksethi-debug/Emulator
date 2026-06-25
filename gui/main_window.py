@@ -139,6 +139,7 @@ class SimWorker(QThread):
                 if delay_ms <= 0:
                     break
                 runner.run(duration_ms=delay_ms)
+                fw.scan_interrupts()      # queue fired ISRs before unblocking
 
                 # real-time pacing: hold the firmware in its delay() until
                 # wall-clock catches up to simulated time
