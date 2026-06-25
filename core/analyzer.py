@@ -170,6 +170,46 @@ def analyze(circuit: dict, cache: CharacterizationCache | None = None,
                     f"power pin '{pin}' net '{net}' is not a power rail",
                     code="erc.no_power", parts=(ref,), pins=(pin,), nets=(net,)))
 
+    # ---- ERC: output contention / shorts to a rail ------------------------------
+    for net, conns in nets.items():
+        outs = [(ref, pin) for ref, pin, role in conns if role == PinRole.DIGITAL_OUT]
+        if outs and net in power:
+            for ref, pin in outs:
+                diags.append(Diagnostic(Severity.ERROR,
+                    f"output '{pin}' drives directly onto power rail '{net}' — short",
+                    code="erc.output_short", parts=(ref,), pins=(pin,), nets=(net,)))
+        elif len(outs) >= 2:
+            diags.append(Diagnostic(Severity.WARNING,
+                f"{len(outs)} push-pull outputs share net '{net}' — possible "
+                f"bus contention",
+                code="erc.contention", nets=(net,),
+                parts=tuple(r for r, _ in outs)))
+
+    # ---- ERC: MCU GPIO tied directly to a power rail (short if driven OUTPUT) ----
+    for ref, pdef in circuit.get("parts", {}).items():
+        gmap = descriptors[ref].get("gpio_map")
+        if not gmap:
+            continue
+        gpio_pins = set(gmap.values())
+        for pin, net in (pdef.get("pins") or {}).items():
+            if pin in gpio_pins and net in power:
+                diags.append(Diagnostic(Severity.ERROR,
+                    f"GPIO '{pin}' is tied directly to rail '{net}' — shorts the "
+                    f"pin if ever driven as an output",
+                    code="erc.gpio_short", parts=(ref,), pins=(pin,), nets=(net,)))
+
+    # ---- ERC: duplicate I2C addresses -------------------------------------------
+    addr_map: dict[int, list[str]] = {}
+    for ref, d in descriptors.items():
+        a = d.get("i2c_address")
+        if a is not None:
+            addr_map.setdefault(int(a), []).append(ref)
+    for a, refs in addr_map.items():
+        if len(refs) > 1:
+            diags.append(Diagnostic(Severity.ERROR,
+                f"I2C address 0x{a:02X} is shared by {', '.join(sorted(refs))}",
+                code="erc.i2c_collision", parts=tuple(sorted(refs))))
+
     # ---- ERC + phenomenon: I2C / open-drain buses -------------------------------
     seen_bus: set[str] = set()
     for net, conns in nets.items():

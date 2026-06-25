@@ -132,6 +132,32 @@ def test_supply_current_tally():
     assert abs(sup.result["current_ma"] - 83.9) < 0.1
 
 
+def test_erc_i2c_address_collision():
+    board = {"power": {"3V3": 3.3, "GND": 0.0}, "parts": {
+        "IMU1": {"type": "mpu6050", "pins": {"VCC": "3V3", "GND": "GND",
+                 "SDA": "SDA", "SCL": "SCL", "AD0": "GND"}},
+        "IMU2": {"type": "mpu6050", "pins": {"VCC": "3V3", "GND": "GND",
+                 "SDA": "SDA", "SCL": "SCL", "AD0": "GND"}},
+    }}
+    assert any(d.code == "erc.i2c_collision" for d in analyze(board).diagnostics)
+
+
+def test_erc_output_contention():
+    board = {"power": {"3V3": 3.3, "GND": 0.0}, "parts": {
+        "P1":  {"type": "pir", "pins": {"VCC": "3V3", "OUT": "BUS", "GND": "GND"}},
+        "IR1": {"type": "ir_receiver", "pins": {"VCC": "3V3", "OUT": "BUS", "GND": "GND"}},
+    }}
+    assert any(d.code == "erc.contention" for d in analyze(board).diagnostics)
+
+
+def test_erc_gpio_short_to_rail():
+    board = {"power": {"3V3": 3.3, "GND": 0.0}, "parts": {
+        "U1": {"type": "esp32-wroom-32",
+               "pins": {"VDD": "3V3", "GND_1": "GND", "CHIP_EN": "3V3", "IO2": "3V3"}},
+    }}
+    assert any(d.code == "erc.gpio_short" for d in analyze(board).diagnostics)
+
+
 def test_transistor_stamps_into_mna():
     from physics.mna import build_devices, BJT
     sub = {"parts": {"Q1": {"type": "transistor_npn",
