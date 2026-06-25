@@ -41,7 +41,7 @@ class PhysicsEngine:
     def tick(self, dt_ms: float, gpio_bus: GPIOBus):
         self._passive.tick(dt_ms, gpio_bus)
         if self._circuit is not None and CONFIG.is_advanced("electrical"):
-            self._rt_mna.solve_writeback(self._circuit, gpio_bus)
+            self._rt_mna.solve_writeback(self._circuit, gpio_bus, self._nodes)
         self._thermal.tick(dt_ms, self._nodes)
 
     @property

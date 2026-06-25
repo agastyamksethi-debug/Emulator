@@ -29,7 +29,7 @@ class RuntimeMNA:
     def __init__(self):
         self._warned = False
 
-    def solve_writeback(self, circuit: dict, gpio) -> None:
+    def solve_writeback(self, circuit: dict, gpio, nodes=None) -> None:
         from physics.mna import build_devices, MNASolver
 
         # 1. drop last tick's solution so it isn't mistaken for a source
@@ -61,3 +61,29 @@ class RuntimeMNA:
         for net, v in volts.items():
             if net not in driven and net not in _GND_NETS:
                 gpio.drive(net, "_mna", float(v))
+
+        # 5. hand each LED its true current (= current through its series resistor)
+        #    so the behavioural brightness model uses the solved value, not a heuristic
+        if nodes:
+            self._update_led_currents(circuit, gpio, nodes)
+
+    def _update_led_currents(self, circuit: dict, gpio, nodes) -> None:
+        from physics.mna.netlist_adapter import _parse_value
+
+        resistors = [(p.get("pins") or {}, _parse_value(str(p.get("value", ""))))
+                     for p in circuit.get("parts", {}).values()
+                     if p.get("type", "").lower() in ("resistor", "r", "device:r")]
+
+        for node in nodes:
+            if not (hasattr(node, "anode_net") and hasattr(node, "brightness_pct")):
+                continue
+            anode = node.anode_net
+            node._mna_current_ma = None
+            for pins, r_ohm in resistors:
+                vals = list(pins.values())
+                if anode in vals and r_ohm and r_ohm > 0:
+                    other = next((v for v in vals if v != anode), None)
+                    if other:
+                        i = abs(gpio.voltage(other) - gpio.voltage(anode)) / r_ohm
+                        node._mna_current_ma = i * 1000.0
+                    break

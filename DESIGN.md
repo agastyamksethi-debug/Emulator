@@ -96,10 +96,9 @@ by all layers. GUI draws pin halos / dashed-red nets / part badges + a Problems 
   outputs, cap junctions) are pinned as sources, the R/diode/LED interconnect is
   stamped, and internal nodes are written back under the `_mna` driver. PassiveModel
   releases its R/diode propagation in this tier (keeps power/thermal). Default Basic
-  to avoid regressions. **Known limitation:** the behavioural `LEDNode` brightness
-  heuristic assumes anode≈source, which the accurate node voltage breaks — so the
-  tier is best for analog/divider/sensor boards; LED brightness should run Basic
-  until `LEDNode` reads the diode's solved current instead.
+  to avoid regressions. LEDs read their MNA-solved current (the diode's bulk
+  resistance no longer double-counts the external series resistor), so brightness
+  matches Basic while the anode voltage is now physically correct.
 - **Phase 3 (next):** generic-IC output over-current (digital_out `i_max_ma`),
   transient/AC on islands, brown-out via rail source impedance, schematic/net
   overlay view, on-disk cache, runtime ±δ jitter on passives/rails.

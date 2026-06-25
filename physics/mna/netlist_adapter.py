@@ -83,7 +83,10 @@ def build_devices(circuit: dict,
             if_ma = float(part_def.get("if_ma", 20.0)) * 1e-3
             Vt    = 0.02585
             IS    = if_ma / (np.exp(vf / (_LED_N * Vt)) - 1.0)
-            RS    = float(part_def.get("series_r", 0.0))
+            # `series_r` is the *external* current-limit resistor (a separate R
+            # device in the netlist); don't double-count it as the diode's bulk
+            # resistance. Use an explicit "rs" only if a part declares one.
+            RS    = float(part_def.get("rs", 0.0))
 
             net_a = pins.get("A", pins.get("+", pins.get("1", "")))
             net_k = pins.get("K", pins.get("-", pins.get("2", "")))

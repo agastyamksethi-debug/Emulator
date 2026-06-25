@@ -49,6 +49,29 @@ def test_basic_cannot_divide():
     assert v > 3.0, f"MID={v}"
 
 
+_LED = {"power": {"3V3": 3.3, "GND": 0.0}, "parts": {
+    "R1": {"type": "resistor", "value": "220", "pins": {"1": "GPIO", "2": "LA"}},
+    "D1": {"type": "led", "color": "red", "vf": 2.0, "if_ma": 20,
+           "series_r": 220, "pins": {"A": "LA", "K": "GND"}},
+}}
+
+
+def test_runtime_mna_led_uses_solved_current():
+    """Under MNA the LED reads its solved current and the anode clamps at Vf."""
+    CONFIG.electrical = Level.ADVANCED
+    try:
+        r = SimRunner()
+        r.load_circuit(_LED)
+        r.bus.gpio.drive("GPIO", "fw", 3.3)
+        for _ in range(6):
+            r.tick(1.0)
+        d = r.node("D1")
+        assert d.on and 4.0 < d.current_ma < 8.0, (d.on, d.current_ma)
+        assert r.bus.gpio.voltage("LA") < 2.2          # clamps near Vf, not the rail
+    finally:
+        CONFIG.electrical = Level.BASIC
+
+
 if __name__ == "__main__":
     fails = 0
     for name, fn in sorted(globals().items()):

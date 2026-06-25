@@ -61,6 +61,7 @@ class LEDNode(Node):
         self._last_print_ms:   float = 0.0
         self._last_brightness: float = -1.0
         self._bus = None
+        self._mna_current_ma = None   # set by the runtime-MNA tier when active
 
     # ---------------------------------------------------------------- wiring ---
 
@@ -87,19 +88,28 @@ class LEDNode(Node):
 
         v_a = self._bus.gpio.voltage(self.anode_net)
         v_k = self._bus.gpio.voltage(self.cathode_net)
-        self.on = (v_a - v_k) >= self.vf
 
-        if self.on and self._series_r > 0:
-            # V_anode in the simulator ≈ V_source (the resistor propagates the
-            # source voltage to the anode net), so:
-            #   I = (V_source − Vf) / R_series = (V_anode − Vf) / R_series
-            self.current_ma = max(0.0, (v_a - self.vf) / self._series_r * 1000)
-            self.brightness_pct = min(100.0, self.current_ma / self.if_ma * 100)
+        from core.fidelity import CONFIG
+        if CONFIG.is_advanced("electrical") and self._mna_current_ma is not None:
+            # runtime MNA solved the real diode current — use it directly so the
+            # accurate node voltage doesn't break the brightness estimate
+            self.current_ma = self._mna_current_ma
+            self.on = self.current_ma > 0.1
+            self.brightness_pct = (min(100.0, self.current_ma / self.if_ma * 100)
+                                   if self.if_ma else 0.0)
             self.power_dissipation = (self.current_ma / 1000) * self.vf
-        elif not self.on:
-            self.current_ma     = 0.0
-            self.brightness_pct = 0.0
-            self.power_dissipation = 0.0
+        else:
+            self.on = (v_a - v_k) >= self.vf
+            if self.on and self._series_r > 0:
+                # V_anode ≈ V_source (series-R propagation), so:
+                #   I = (V_source − Vf) / R_series = (V_anode − Vf) / R_series
+                self.current_ma = max(0.0, (v_a - self.vf) / self._series_r * 1000)
+                self.brightness_pct = min(100.0, self.current_ma / self.if_ma * 100)
+                self.power_dissipation = (self.current_ma / 1000) * self.vf
+            elif not self.on:
+                self.current_ma     = 0.0
+                self.brightness_pct = 0.0
+                self.power_dissipation = 0.0
 
         v_drop = v_a - v_k
 
